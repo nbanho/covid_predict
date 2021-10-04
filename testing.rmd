@@ -1,0 +1,88 @@
+---
+title: "Testing"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Libraries
+
+```{r}
+# General
+library(tidyverse)
+
+# renewable equation model based on EpiEstim
+source("models/renewable_cori.r")
+source("utils/predict.r")
+```
+
+## Data
+
+```{r}
+df <- read_csv("data/prep_jhu_all_countries.csv") %>%
+  dplyr::filter(id %in% c("ITA", "DEU"))
+
+countries <- unique(df$id)
+```
+
+## EpiEstim 
+
+### Train & Pred
+
+```{r}
+set.seed(12345) 
+
+results_ee <- list()
+
+for (j in 1:length(countries)) {
+  
+  # data
+  ctry <- countries[j]
+  df_ctry <- subset(df, id == ctry)
+  
+  # test data
+  test_df_ctry <- slice(df_ctry, (n_calib+1):nrow(df_ctry))
+  
+  # R estimates
+  train_ctry <- train.renewable_cori(df_ctry$new_confirmed)
+  
+  # predictions
+  pred_mat <- matrix(NA, ncol = n_preds, nrow = nrow(test_df_ctry))
+  for (k in 1:nrow(test_df_ctry)) {
+    train_df_ctry <- slice(df_ctry, (k):(n_train+k-1))
+    prev_inc <- create_inc(train_df_ctry$new_confirmed, train_df_ctry$date)
+    preds <- predict_cases(train_obj = train_ctry, train_dat = prev_inc, n = n_preds, d = n_draws, i = n_preds+k-1)
+    mean_preds <- rowMeans(preds)
+    pred_mat[k, ] <- mean_preds
+  }
+  
+  # combine
+  pred_df <- data.frame(pred_mat) %>%
+    set_names(paste0("pred_ahead_", 1:n_preds)) %>%
+    mutate(id = ctry,
+           date = test_df_ctry$date) %>%
+    reshape2::melt(c("id", "date")) %>%
+    rename(n_ahead = variable) %>%
+    mutate(n_ahead = as.numeric(stringi::stri_extract(n_ahead, regex = "\\d{1,2}")))
+  
+  results_ee[[j]] <- pred_df
+}
+
+results_ee_df <- do.call(rbind, results_ee)
+results_ee_df <- left_join(results_ee_df, dplyr::select(df, id, date, new_confirmed))
+```
+
+### Evaluation
+
+```{r}
+ggplot() +
+  geom_line(data = results_ee_df, mapping = aes(x = date, y = value, color = n_ahead)) +
+  geom_line(data = subset(results_ee_df, n_ahead == 1), mapping = aes(x = date, y = new_confirmed), color = "black") +
+  facet_wrap(~ id) +
+  scale_color_viridis_c() +
+  labs(y = "Number of new cases", color = "N") +
+  theme_bw() +
+  theme(axis.title.x = element_blank())
+```
