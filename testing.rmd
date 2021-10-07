@@ -10,12 +10,23 @@ knitr::opts_chunk$set(echo = TRUE)
 ## Libraries
 
 ```{r}
-# General
+# general
 library(tidyverse)
+library(tidybayes)
+
+# default settings
+source("settings/defaults.r")
 
 # renewable equation model based on EpiEstim
-source("models/renewable_cori.r")
+source("models/cori.r")
 source("utils/predict.r")
+
+# ARIMA
+source("models/arima.r")
+library(astsa)
+
+# Prophet
+source("models/prophet.r")
 ```
 
 ## Data
@@ -29,11 +40,26 @@ countries <- unique(df$id)
 
 ## EpiEstim 
 
+### Toy example
+
+```{r}
+deu_first200 <- df %>%
+  dplyr::filter(id == "DEU") %>%
+  slice(1:200) 
+fit_first200 <- train.cori(deu_first200$new_confirmed)
+
+# predict
+deu_pred <- predict.cori(fit_first200, inc = create_inc(deu_first200$new_confirmed, deu_first200$date))
+deu_first221 <- df %>%
+  dplyr::filter(id == "DEU") %>%
+  slice(1:221) %>%
+  dplyr::select(date, new_confirmed)
+plot.predict(deu_first221$date, deu_first221$new_confirmed, deu_pred)
+```
+
 ### Train & Pred
 
 ```{r}
-set.seed(12345) 
-
 results_ee <- list()
 
 for (j in 1:length(countries)) {
@@ -43,17 +69,17 @@ for (j in 1:length(countries)) {
   df_ctry <- subset(df, id == ctry)
   
   # test data
-  test_df_ctry <- slice(df_ctry, (n_calib+1):nrow(df_ctry))
+  test_df_ctry <- slice(df_ctry, (n_train+1):nrow(df_ctry))
   
   # R estimates
-  train_ctry <- train.renewable_cori(df_ctry$new_confirmed)
+  train_ctry <- train.cori(df_ctry$new_confirmed)
   
   # predictions
   pred_mat <- matrix(NA, ncol = n_preds, nrow = nrow(test_df_ctry))
   for (k in 1:nrow(test_df_ctry)) {
     train_df_ctry <- slice(df_ctry, (k):(n_train+k-1))
     prev_inc <- create_inc(train_df_ctry$new_confirmed, train_df_ctry$date)
-    preds <- predict_cases(train_obj = train_ctry, train_dat = prev_inc, n = n_preds, d = n_draws, i = n_preds+k-1)
+    preds <- predict.cori(estimate_R_obj = train_ctry, inc = prev_inc, n = n_preds, d = n_draws, i = n_preds+k-1)
     mean_preds <- rowMeans(preds)
     pred_mat[k, ] <- mean_preds
   }
@@ -66,7 +92,7 @@ for (j in 1:length(countries)) {
     reshape2::melt(c("id", "date")) %>%
     rename(n_ahead = variable) %>%
     mutate(n_ahead = as.numeric(stringi::stri_extract(n_ahead, regex = "\\d{1,2}")))
-  
+  write_csv(pred_df, paste0("predictions/cori/", ctry, ".csv"))
   results_ee[[j]] <- pred_df
 }
 
@@ -80,6 +106,158 @@ results_ee_df <- left_join(results_ee_df, dplyr::select(df, id, date, new_confir
 ggplot() +
   geom_line(data = results_ee_df, mapping = aes(x = date, y = value, color = n_ahead)) +
   geom_line(data = subset(results_ee_df, n_ahead == 1), mapping = aes(x = date, y = new_confirmed), color = "black") +
+  facet_wrap(~ id) +
+  scale_color_viridis_c() +
+  labs(y = "Number of new cases", color = "N") +
+  theme_bw() +
+  theme(axis.title.x = element_blank())
+```
+
+
+## ARIMA
+
+### Toy example
+
+```{r}
+# toy model
+deu_first200 <- subset(df, id == "DEU")$new_confirmed[1:200]
+fit_first200 <- train.arima(deu_first200)
+
+# predict
+deu_pred <- predict.arima(fit_first200)
+deu_first221 <- df %>%
+  dplyr::filter(id == "DEU") %>%
+  slice(1:221) %>%
+  dplyr::select(date, new_confirmed)
+plot.predict(deu_first221$date, deu_first221$new_confirmed, deu_pred)
+```
+
+### Train & Pred
+
+```{r}
+results_am <- list()
+
+for (j in 1:length(countries)) {
+  
+  # data
+  ctry <- countries[j]
+  df_ctry <- subset(df, id == ctry)
+  
+  # test data
+  test_df_ctry <- slice(df_ctry, (n_train+1):nrow(df_ctry))
+  
+  # predictions
+  pred_mat <- matrix(NA, ncol = n_preds, nrow = nrow(test_df_ctry))
+  for (k in 1:nrow(test_df_ctry)) {
+    train_df_ctry <- slice(df_ctry, 1:(n_train+k-1))
+    trained_model <- train.arima(train_df_ctry$new_confirmed)
+    preds <- predict.arima(trained_model)
+    mean_preds <- rowMeans(preds)
+    pred_mat[k, ] <- mean_preds
+  }
+  
+  # combine
+  pred_df <- data.frame(pred_mat) %>%
+    set_names(paste0("pred_ahead_", 1:n_preds)) %>%
+    mutate(id = ctry,
+           date = test_df_ctry$date) %>%
+    reshape2::melt(c("id", "date")) %>%
+    rename(n_ahead = variable) %>%
+    mutate(n_ahead = as.numeric(stringi::stri_extract(n_ahead, regex = "\\d{1,2}")))
+  write_csv(pred_df, paste0("predictions/arima/", ctry, ".csv"))
+  results_am[[j]] <- pred_df
+}
+
+results_am_df <- do.call(rbind, results_am)
+results_am_df <- left_join(results_am_df, dplyr::select(df, id, date, new_confirmed))
+```
+
+### Evaluation
+
+```{r}
+ggplot() +
+  geom_line(data = results_am_df, mapping = aes(x = date, y = value, color = n_ahead)) +
+  geom_line(data = subset(results_am_df, n_ahead == 1), mapping = aes(x = date, y = new_confirmed), color = "black") +
+  facet_wrap(~ id) +
+  scale_color_viridis_c() +
+  labs(y = "Number of new cases", color = "N") +
+  theme_bw() +
+  theme(axis.title.x = element_blank())
+```
+
+
+## Prophet
+
+### Toy example
+
+```{r}
+deu_first200 <- df %>%
+  dplyr::filter(id == "DEU") %>%
+  slice(1:200) %>%
+  dplyr::select(date, new_confirmed) %>%
+  set_names(c("ds", "y"))
+fit_first200 <- train.prophet(deu_first200)
+
+# predict
+deu_pred <- predict.prophet(fit_first200)
+deu_first221 <- df %>%
+  dplyr::filter(id == "DEU") %>%
+  slice(1:221) %>%
+  dplyr::select(date, new_confirmed)
+plot.predict(deu_first221$date, deu_first221$new_confirmed, deu_pred)
+```
+
+### Train & Pred
+
+```{r}
+set.seed(12345) 
+
+results_pt <- list()
+
+for (j in 1:length(countries)) {
+  
+  # data
+  ctry <- countries[j]
+  df_ctry <- subset(df, id == ctry)
+  
+  # test data
+  test_df_ctry <- slice(df_ctry, (n_train+1):nrow(df_ctry))
+  
+  # predictions
+  pred_mat <- matrix(NA, ncol = n_preds, nrow = nrow(test_df_ctry))
+  for (k in 1:nrow(test_df_ctry)) {
+    train_df_ctry <- df_ctry %>%
+      slice(1:(n_train+k-1)) %>%
+      dplyr::select(date, new_confirmed) %>%
+      set_names(c("ds", "y"))
+    trained_model <- train.prophet(train_df_ctry)
+    preds <- predict.prophet(trained_model)
+    mean_preds <- rowMeans(preds)
+    pred_mat[k, ] <- mean_preds
+  }
+  
+  # combine
+  pred_df <- data.frame(pred_mat) %>%
+    set_names(paste0("pred_ahead_", 1:n_preds)) %>%
+    mutate(id = ctry,
+           date = test_df_ctry$date) %>%
+    reshape2::melt(c("id", "date")) %>%
+    rename(n_ahead = variable) %>%
+    mutate(n_ahead = as.numeric(stringi::stri_extract(n_ahead, regex = "\\d{1,2}")))
+  write_csv(pred_df, paste0("predictions/prophet/", ctry, ".csv"))
+  results_pt[[j]] <- pred_df
+}
+
+results_pt_df <- do.call(rbind, results_pt)
+results_pt_df <- left_join(results_pt_df, dplyr::select(df, id, date, new_confirmed))
+```
+
+### Evaluation
+
+```{r}
+ggplot() +
+  geom_line(data = results_pt_df, mapping = aes(x = date, y = value, color = n_ahead)) +
+  geom_line(data = subset(results_pt_df, n_ahead == 1), mapping = aes(x = date, y = new_confirmed), color = "black") +
   facet_wrap(~ id) +
   scale_color_viridis_c() +
   labs(y = "Number of new cases", color = "N") +

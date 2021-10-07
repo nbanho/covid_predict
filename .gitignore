@@ -1,3 +1,8 @@
+# Files
+predictions/**/*.csv
+
+
+# R
 # History files
 .Rhistory
 .Rapp.history

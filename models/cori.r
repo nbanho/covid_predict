@@ -5,12 +5,10 @@ library(epitrix)
 library(distcrete)
 library(incidence)
 
-# default settings
-source("settings/defaults.r")
-
 # serial interval
 # based on Li et al 2020 - Early transmission dynamics in Wuhan, China, of novel coronavirus–infected pneumonia
 config_si <- make_config(
+  seed = seed12345,
   mean_si = 7.5,
   std_si = sqrt(11.6)
 )
@@ -35,28 +33,31 @@ create_inc <- function(
 }
 
 # train
-train.renewable_cori <- function(
+train.cori <- function(
   new_confirmed, # number of new confirmed cases
-  config = config_si # configuration, i.e. serial interval distribution
+  config = config_si, # configuration, i.e. serial interval distribution
+  ... # additional model parameters
   ) {
   
   # estimate R over time
   estimate_R(
     incid = new_confirmed,
     method = "parametric_si",
-    config = config
+    config = config,
+    ...
   )
   
 }
 
 # predict
-predict.renewable_cori <- function(
+predict.cori <- function(
   estimate_R_obj, # train object from train.renewable_cori
   inc, # incidence object from create_inc with data over training period
   i = 1, # R estimate to use for projection (default: i = 1 --> use latest)
   si = si_distr, # serial interval distribution
   n = n_preds, # number of days to project into the future
-  d = n_draws # number of posterior draws
+  d = n_draws, # number of posterior draws
+  ... # additional parameters
   ) {
   
   # extract plausible r values from most recent estimate
@@ -71,7 +72,8 @@ predict.renewable_cori <- function(
     R = plausible_r,
     si = si,
     n_days = n,
-    n_sim = d
+    n_sim = d,
+    ...
   )
   
   return(as.matrix(proj))
