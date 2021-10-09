@@ -1,0 +1,113 @@
+---
+title: "Evaluation"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Libraries
+
+```{r}
+# libraries
+library(tidyverse)
+
+# utils
+source("utils/eval.r")
+source("utils/delays.r")
+```
+
+## Data
+
+```{r}
+df <- data_frame(file = list.files("predictions/", pattern = ".csv", full.names = T)) %>%
+  mutate(data = map(file, read_csv)) %>%
+  unnest()
+```
+
+
+## Plot predict
+
+```{r}
+df %>%
+  rename(true = new_confirmed, pred = pred_new_confirmed_arima) %>%
+  plot_predict(dat = ., countries = "DEU")
+
+df %>%
+  rename(true = new_confirmed, pred = pred_new_confirmed_arima) %>%
+  plot_predict(dat = ., countries = c("BEL", "ITA"))
+
+df %>%
+  rename(true = new_confirmed, pred = pred_new_confirmed_arima) %>%
+  plot_predict(dat = ., N = 7, start_date = "2021-01-01", end_date = "2021-04-01")
+```
+
+
+## Prediction error
+
+```{r}
+df_err <- df %>%
+  dplyr::select(id, new_confirmed, matches("pred_"), population, n_ahead) %>%
+  reshape2::melt(c("id", "new_confirmed", "population", "n_ahead")) %>%
+  mutate(variable = gsub("pred_new_confirmed_", "", variable)) %>%
+  mutate(sqerr = pred_error(new_confirmed, value, population))
+
+df_err_sum <- df_err %>%
+  group_by(id, variable, n_ahead) %>%
+  summarize(rmse = sqrt(mean(sqerr))) %>%
+  ungroup()
+```
+
+### Distribution
+
+
+```{r}
+hist_pred_err(df_err, method = c("cori", "prophet"))
+```
+
+
+### By category
+
+```{r}
+plot_rmse(df_err_sum, method = c("cori", "prophet"))
+```
+
+
+### Overall by N
+
+```{r}
+plot_rmse_overall(df_err_sum, method = c("cori", "prophet"))
+```
+
+
+## Weighted pred error
+
+```{r}
+WM <- data_delay(30, T, p_in, mu = rnorm(1e4, 10.92, 0.94), sigma = rnorm(1e4, 5.41, 0.27))
+w <- WM %>%
+  group_by(x) %>%
+  summarize(mean_weight = mean(value)) %>%
+  dplyr::select(mean_weight) %>%
+  unlist()
+
+plot(w)
+
+df_err_weighted <- df_err %>%
+  mutate(wsqerr = pred_error.weighted(w, n_ahead, true = new_confirmed, pred = value, pop = population)) %>%
+  group_by(id, variable) %>%
+  summarize(rmse = sum(wsqerr)) %>%
+  ungroup()
+```
+
+### By country
+
+```{r}
+plot_rmse_weighted(df_err_weighted, method = c("cori", "prophet"))
+```
+
+### Overall
+
+```{r}
+plot_rmse_weighted_overall(df_err_weighted, method = c("cori", "prophet"))
+```
