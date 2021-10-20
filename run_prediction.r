@@ -48,36 +48,38 @@ run_prediction <- function() {
       train_df_ctry <- slice(df_ctry, 1:(n_train+k-1))
       
       # test data
-      pred_df <- df_ctry %>%
-        slice((n_train+k):(n_train+k-1+n_preds)) 
+      pred_df <- slice(df_ctry, (n_train+k):(n_train+k-1+n_preds)) 
+      pred_k <- list(id = ctry,
+                     date = pred_df$date, 
+                     n_ahead = 1:nrow(pred_df),
+                     new_confirmed = pred_df$new_confirmed)
       
       # train and predict
       if ("arima" %in% models) {
-        trained_arima <- train(train_df_ctry$date, train_df_ctry$new_confirmed, method = "arima")
+        train_df_ctry120 <- tail(train_df_ctry, 120) 
+        trained_arima <- train(train_df_ctry120$date, train_df_ctry120$new_confirmed, method = "arima")
         predicted_arima <- predict(trained_arima, method = "arima")
-        pred_df$pred_new_confirmed_arima <- rowMeans(predicted_arima)[1:nrow(pred_df)]
+        pred_k$arima <- predicted_arima[1:nrow(pred_df), ]
       } 
       if ("prophet" %in% models) {
         trained_prophet <- train(train_df_ctry$date, train_df_ctry$new_confirmed, method = "prophet")
         predicted_prophet <- predict(trained_prophet, method = "prophet")
-        pred_df$pred_new_confirmed_prophet <- rowMeans(predicted_prophet)[1:nrow(pred_df)]
+        pred_k$prophet <- predicted_prophet[1:nrow(pred_df), ]
       }
       if ("cori" %in% models) {
         train_df_ctry_cori <- slice(df_ctry, (k):(n_train+k-1))
         trained_cori <- train(train_df_ctry_cori$date, train_df_ctry_cori$new_confirmed, method = "cori")
         prev_inc <- create_inc(train_df_ctry_cori$new_confirmed, train_df_ctry_cori$date)
         predicted_cori <- predict(trained_cori, method = "cori", inc = prev_inc, i = n_preds+k-1)
-        pred_df$pred_new_confirmed_cori <- rowMeans(predicted_cori)[1:nrow(pred_df)]
+        pred_k$cori <- predicted_cori[1:nrow(pred_df), ]
       }
     
       # store predictions
-      pred_df$n_ahead <- 1:nrow(pred_df)
-      pred_list[[k]] <- pred_df
+      pred_list[[k]] <- pred_k
     }
     
-    # combine and save
-    pred_df <- do.call(rbind, pred_list)
-    write_csv(pred_df, paste0("predictions/", ctry, ".csv"))
+    # save
+    saveRDS(pred_list, paste0("predictions/", ctry, ".rds"))
   }
   
 }
