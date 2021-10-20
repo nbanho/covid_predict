@@ -1,7 +1,9 @@
 run_prediction <- function() {
   
   # settings
-  models <- commandArgs(trailingOnly = TRUE)
+  args <- commandArgs(trailingOnly = TRUE)
+  id_idx <- args[1:2]
+  models <- args[3:length(args)]
   source("settings/defaults.r")
   
   # libraries 
@@ -21,7 +23,7 @@ run_prediction <- function() {
     dplyr::filter(id %in% c("AUT", "BEL", "BGR", "HRV", "CYP", "CZE", "DNK", "EST", 
                             "FIN", "FRA", "DEU", "GRC", "HUN", "IRL", "ITA", "LVA",
                             "LTU", "LUX", "MLT", "NLD", "POL", "PRT", "ROU", "SVK",
-                            "SVN", "ESP", "SWE", "GBR"))
+                            "SVN", "ESP", "SWE", "GBR")[id_idx[1]:id_idx[2]])
   countries <- unique(df$id)
   
   for (j in 1:length(countries)) {
