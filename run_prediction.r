@@ -41,7 +41,10 @@ run_prediction <- function() {
     }
     
     # array to store predictions
-    pred_list <- list()
+    test_df_ctry <- as_tibble(test_df_ctry)
+    if ("arima" %in% models) { test_df_ctry$arima <- list(NA) }
+    if ("prophet" %in% models) { test_df_ctry$arima <- list(NA) }
+    if ("cori" %in% models) { test_df_ctry$arima <- list(NA) }
     
     # loop over test set
     for (k in 1:nrow(test_df_ctry)) {
@@ -60,28 +63,25 @@ run_prediction <- function() {
       if ("arima" %in% models) {
         train_df_ctry120 <- tail(train_df_ctry, 120) 
         trained_arima <- train(train_df_ctry120$date, train_df_ctry120$new_confirmed, method = "arima")
-        predicted_arima <- predict(trained_arima, method = "arima")
-        pred_k$arima <- predicted_arima[1:nrow(pred_df), ]
+        predicted_arima <- predict(trained_arima)
+        test_df_ctry$arima[[k]] <- predicted_arima[1:nrow(pred_df), ]
       } 
       if ("prophet" %in% models) {
         trained_prophet <- train(train_df_ctry$date, train_df_ctry$new_confirmed, method = "prophet")
-        predicted_prophet <- predict(trained_prophet, method = "prophet")
-        pred_k$prophet <- predicted_prophet[1:nrow(pred_df), ]
+        predicted_prophet <- predict(trained_prophet)
+        test_df_ctry$prophet[[k]] <- predicted_prophet[1:nrow(pred_df), ]
       }
       if ("cori" %in% models) {
         train_df_ctry_cori <- slice(df_ctry, (k):(n_train+k-1))
         trained_cori <- train(train_df_ctry_cori$date, train_df_ctry_cori$new_confirmed, method = "cori")
         prev_inc <- create_inc(train_df_ctry_cori$new_confirmed, train_df_ctry_cori$date)
-        predicted_cori <- predict(trained_cori, method = "cori", inc = prev_inc, i = n_preds+k-1)
-        pred_k$cori <- predicted_cori[1:nrow(pred_df), ]
+        predicted_cori <- predict(trained_cori, inc = prev_inc, i = n_preds+k-1)
+        test_df_ctry$cori[[k]] <- predicted_cori[1:nrow(pred_df), ]
       }
-    
-      # store predictions
-      pred_list[[k]] <- pred_k
     }
     
     # save
-    saveRDS(pred_list, paste0("predictions/", ctry, ".rds"))
+    saveRDS(test_df_ctry, paste0("predictions/", ctry, ".rds"))
   }
   
 }

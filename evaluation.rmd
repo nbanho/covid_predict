@@ -21,63 +21,85 @@ source("utils/delays.r")
 ## Data
 
 ```{r}
-df <- data_frame(file = list.files("predictions/", pattern = ".csv", full.names = T)) %>%
-  mutate(data = map(file, read_csv)) %>%
-  unnest()
+files <- list.files("predictions", pattern = ".rds", full.names = T)[1:3]
+df <- map(files, readRDS)
+df <- do.call(rbind, df)
 ```
 
 
 ## Plot predict
 
 ```{r}
-df %>%
-  rename(true = new_confirmed, pred = pred_new_confirmed_arima) %>%
-  plot_predict(dat = ., countries = "DEU")
+plot_predict(dat = df, countries = "AUT", method = "arima",
+             start_date = "2020-10-01", end_date = "2021-01-01", 
+             point_estimate = mean) 
+  
 
-df %>%
-  rename(true = new_confirmed, pred = pred_new_confirmed_arima) %>%
-  plot_predict(dat = ., countries = c("BEL", "ITA"))
+plot_predict(dat = df, countries = c("AUT", "BEL"), N = c(1, 11, 21), 
+             start_date = "2020-10-01", end_date = "2021-01-01", 
+             point_estimate = mean) 
+  
 
-df %>%
-  rename(true = new_confirmed, pred = pred_new_confirmed_arima) %>%
-  plot_predict(dat = ., N = 7, start_date = "2021-01-01", end_date = "2021-04-01")
+plot_predict(dat = df, countries = "AUT", method = "cori", N = 11,
+             start_date = "2020-10-01", end_date = "2021-01-01") 
+  
+
+plot_predict(dat = df, countries = c("AUT", "BEL"), N = 11, 
+             start_date = "2020-10-01", end_date = "2021-01-01") 
+  
 ```
 
 
-## Prediction error
+## Prediction score
 
 ```{r}
-df_err <- df %>%
-  dplyr::select(id, new_confirmed, matches("pred_"), population, n_ahead) %>%
-  reshape2::melt(c("id", "new_confirmed", "population", "n_ahead")) %>%
-  mutate(variable = gsub("pred_new_confirmed_", "", variable)) %>%
-  mutate(sqerr = pred_error(new_confirmed, value, population))
+rep.pred_score <- function(y, Yhat, divisor = NULL) {
+  score <- list()
+  for (i in 1:length(y)) {
+    if (is.null(dim(Yhat[[i]]))) { Yhat[[i]] <- t(as.matrix(Yhat[[i]])) }
+    N <- nrow(Yhat[[i]])
+    s <- length(N)
+    for (n in 1:N) {
+      s[n] <- pred_score(true = y[[i]], pred = Yhat[[i]][n, ], 
+                         normalizer = ifelse(is.null(divisor), NULL, divisor[[i]]))
+    }
+    score[[i]] <- s
+  }
+  return(score)
+}
 
-df_err_sum <- df_err %>%
+df_ps <- df %>%
+  dplyr::select(id, new_confirmed, arima, prophet, cori, population) %>%
+  mutate(ps_arima = rep.pred_score(new_confirmed, arima, population),
+         ps_cori = rep.pred_score(new_confirmed, cori, population),
+         ps_prophet = rep.pred_score(new_confirmed, prophet, population)) %>%
+  mutate(n_ahead = sapply(arima, function(A) if (is.null(dim(A))) { 1 } else { 1:nrow(A) } )) %>%
+  unnest(cols = c("n_ahead", "ps_arima", "ps_cori", "ps_prophet")) 
+  
+
+df_ps_sum <- df_ps %>%
+  dplyr::select(id, n_ahead, ps_arima, ps_cori, ps_prophet) %>%
+  reshape2::melt(c("id", "n_ahead")) %>%
+  mutate(variable = gsub("ps_", "", variable)) %>%
   group_by(id, variable, n_ahead) %>%
-  summarize(rmse = sqrt(mean(sqerr))) %>%
+  summarize(score = mean(value)) %>%
   ungroup()
-```
-
-### Distribution
-
-
-```{r}
-hist_pred_err(df_err, method = c("cori", "prophet"))
 ```
 
 
 ### By category
 
 ```{r}
-plot_rmse(df_err_sum, method = c("cori", "prophet"))
+plot_score(df_ps_sum, method = c("arima", "cori", "prophet"))
+plot_score(df_ps_sum, method = c("arima", "prophet"))
 ```
 
 
 ### Overall by N
 
 ```{r}
-plot_rmse_overall(df_err_sum, method = c("cori", "prophet"))
+plot_score_overall(df_ps_sum, method = c("arima", "cori", "prophet"))
+plot_score_overall(df_ps_sum, method = c("arima", "prophet"))
 ```
 
 
@@ -91,23 +113,36 @@ w <- WM %>%
   dplyr::select(mean_weight) %>%
   unlist()
 
-plot(w)
+plot(w, xlab = "Days ahead", ylab = "Weight", type = "b")
 
-df_err_weighted <- df_err %>%
-  mutate(wsqerr = pred_error.weighted(w, n_ahead, true = new_confirmed, pred = value, pop = population)) %>%
+df_ps_weighted <- df_ps %>%
+  dplyr::select(id, n_ahead, ps_arima, ps_cori, ps_prophet) %>%
+  mutate(ps_arima = ps_arima * w[n_ahead],
+         ps_cori = ps_cori * w[n_ahead],
+         ps_prophet = ps_prophet * w[n_ahead]) %>%
+  dplyr::select(-n_ahead) %>%
+  reshape2::melt("id") %>%
+  mutate(variable = gsub("ps_", "", variable)) %>%
   group_by(id, variable) %>%
-  summarize(rmse = sum(wsqerr)) %>%
+  summarize(score = sum(value)) %>%
   ungroup()
 ```
 
 ### By country
 
 ```{r}
-plot_rmse_weighted(df_err_weighted, method = c("cori", "prophet"))
+plot_score(df_ps_weighted, method = c("arima", "cori", "prophet"), weighted = T)
 ```
 
 ### Overall
 
 ```{r}
-plot_rmse_weighted_overall(df_err_weighted, method = c("cori", "prophet"))
+plot_score_overall(df_ps_weighted, weighted = T)
+```
+
+
+## Calibration
+
+```{r}
+plot_calibration(dat = df, N = 11)
 ```
