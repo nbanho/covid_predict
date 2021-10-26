@@ -54,10 +54,6 @@ run_prediction <- function() {
       
       # test data
       pred_df <- slice(df_ctry, (n_train+k):(n_train+k-1+n_preds)) 
-      pred_k <- list(id = ctry,
-                     date = pred_df$date, 
-                     n_ahead = 1:nrow(pred_df),
-                     new_confirmed = pred_df$new_confirmed)
       
       # train and predict
       if ("arima" %in% models) {
