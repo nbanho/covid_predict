@@ -1,7 +1,7 @@
 train <- function(
   date, # date
   target, # target
-  method = "prophet", 
+  method = "prophet", # model
   ... # additional model-specific parameters
   ) {
   

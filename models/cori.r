@@ -55,8 +55,8 @@ predict.cori <- function(
   inc, # incidence object from create_inc with data over training period
   i = 1, # R estimate to use for projection (default: i = 1 --> use latest)
   si = si_distr, # serial interval distribution
-  n = n_preds, # number of days to project into the future
-  d = n_draws, # number of posterior draws
+  n = 1, # number of days to project into the future
+  d = 4e3, # number of posterior draws
   ... # additional parameters
   ) {
   

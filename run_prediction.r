@@ -18,11 +18,11 @@ run_prediction <- function() {
   source("models/arima.r")
   source("models/prophet.r")
   
-  # data (EU-27)
+  # data (EU-27) - MLT - LUX - CYP + Uk + CHE
   df <- read_csv("data/prep_jhu_all_countries.csv") %>%
-    dplyr::filter(id %in% c("AUT", "BEL", "BGR", "HRV", "CYP", "CZE", "DNK", "EST", 
+    dplyr::filter(id %in% c("AUT", "BEL", "BGR", "CHE", "HRV", "CZE", "DNK", "EST", 
                             "FIN", "FRA", "DEU", "GRC", "HUN", "IRL", "ITA", "LVA",
-                            "LTU", "LUX", "MLT", "NLD", "POL", "PRT", "ROU", "SVK",
+                            "LTU", "NLD", "POL", "PRT", "ROU", "SVK",
                             "SVN", "ESP", "SWE", "GBR")[id_idx[1]:id_idx[2]])
   countries <- unique(df$id)
   
@@ -35,9 +35,15 @@ run_prediction <- function() {
     # test data
     test_df_ctry <- slice(df_ctry, (n_train+1):nrow(df_ctry))
     
+    # for EpiEstim, get all R estimates right away
     if ("cori" %in% models) {
-      # for EpiEstim, get all R estimates right away
+      
       train_ctry <- train(df_ctry$date, df_ctry$new_confirmed, method = "cori")
+    }
+    
+    if ("prophet" %in% models) {
+      # for prophet: set max cap a little bit above maximum observed incidence among all countries
+      ctry_cap <- max_inc * df_ctry$population[1] / 1e5
     }
     
     # array to store predictions
@@ -52,18 +58,25 @@ run_prediction <- function() {
       # train data
       train_df_ctry <- slice(df_ctry, 1:(n_train+k-1))
       
+      if ("prophet" %in% models | "arima" %in% models) {
+        # use only last 4 months of data to fit arima and prophet
+        train_df_ctry120 <- tail(train_df_ctry, 120) 
+      }
+      
       # test data
       pred_df <- slice(df_ctry, (n_train+k):(n_train+k-1+n_preds)) 
       
       # train and predict
       if ("arima" %in% models) {
-        train_df_ctry120 <- tail(train_df_ctry, 120) 
-        trained_arima <- train(train_df_ctry120$date, train_df_ctry120$new_confirmed, method = "arima")
+        
+        trained_arima <- train(train_df_ctry120$date, train_df_ctry120$new_confirmed, method = "arima", 
+                               iter = n_sample)
         predicted_arima <- predict(trained_arima)
         test_df_ctry$arima[[k]] <- predicted_arima[1:nrow(pred_df), ]
       } 
       if ("prophet" %in% models) {
-        trained_prophet <- train(train_df_ctry$date, train_df_ctry$new_confirmed, method = "prophet")
+        trained_prophet <- train(train_df_ctry120$date, train_df_ctry120$new_confirmed, method = "prophet", 
+                                 cap = ctry_cap, mcmc.samples = n_sample)
         predicted_prophet <- predict(trained_prophet)
         test_df_ctry$prophet[[k]] <- predicted_prophet[1:nrow(pred_df), ]
       }

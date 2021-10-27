@@ -3,12 +3,10 @@ library(rstan)
 
 train.arima <- function(
   y, # number of new confirmed cases
-  seed0 = seed12345, # seed
   ... # additional model parameters
 ) {
   
-  set.seed(seed0) # don't think this will work as varstan is calling rstan without seed argument
-  fit <- auto.sarima(y, iter = 2000, ...)  
+  fit <- auto.sarima(y, ...)  
     
   return(fit)
 }
