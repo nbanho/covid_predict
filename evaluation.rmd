@@ -54,7 +54,7 @@ df %>%
   rename(date = date_ahead, observed = new_confirmed_ahead) %>%
   dplyr::select(-cori) %>%
   reshape2::melt(c("id", "date")) %>%
-  plot_predict(interval = T)
+  plot_predict(interval = T, smoothing = 7)
   
 df %>%
   dplyr::filter(id %in% c("BEL", "AUT")) %>%
@@ -66,7 +66,7 @@ df %>%
   rename(date = date_ahead, observed = new_confirmed_ahead) %>%
   dplyr::select(-cori) %>%
   reshape2::melt(c("id", "date", "n_ahead")) %>%
-  plot_predict(interval = F)
+  plot_predict(interval = F, smoothing = 7)
 ```
 
 
@@ -74,14 +74,14 @@ df %>%
 
 ```{r}
 df_ps <- df %>%
-  dplyr::select(id, new_confirmed_ahead, n_ahead, arima, prophet, cori, population) %>%
+  dplyr::select(id, new_confirmed_ahead, date_ahead, n_ahead, arima, prophet, cori, population) %>%
   rowwise() %>%
   mutate_at(vars(arima, cori, prophet), ~ pred_score(., new_confirmed_ahead, population)) %>%
-  unnest(cols = c("n_ahead", "arima", "cori", "prophet"))
+  unnest(cols = c("n_ahead", "date_ahead", "new_confirmed_ahead", "arima", "cori", "prophet"))
 ```
 
 
-### By category
+### By ID and N
 
 ```{r}
 df_ps %>%
@@ -91,7 +91,39 @@ df_ps %>%
   group_by(id, n_ahead, variable) %>%
   summarize(score = mean(value)) %>%
   ungroup() %>%
+  rename(facet_var = n_ahead) %>%
   plot_score(name = "Average conditional ranked probability score")
+```
+
+### By ID and Q
+
+```{r}
+df_ps %>%
+  dplyr::filter(n_ahead == 10) %>%
+  group_by(id) %>%
+  mutate(qgroup = ntile(new_confirmed_ahead / population, 5)) %>%
+  ungroup() %>%
+  dplyr::select(id, qgroup, arima, cori, prophet) %>%
+  reshape2::melt(c("id", "qgroup")) %>%
+  group_by(id, qgroup, variable) %>%
+  summarize(score = mean(value)) %>%
+  ungroup() %>% 
+  rename(facet_var = qgroup) %>%
+  plot_score(facet_name = "Quantile: ", 
+             name = "Average conditional ranked probability score for N = 10")
+```
+
+
+### Over time
+
+```{r}
+df_ps %>%
+  dplyr::filter(n_ahead == 10) %>%
+  dplyr::select(id, date_ahead, arima, prophet) %>%
+  reshape2::melt(c("id", "date_ahead")) %>%
+  rename(facet_var = id, date = date_ahead, score = value) %>%
+  plot_score.time(smoothing = 7, facet_name = "", 
+                  name = "Average conditional ranked probability score for N = 10")
 ```
 
 
@@ -136,6 +168,7 @@ df_ps_weighted %>%
   group_by(id, n_ahead, variable) %>%
   summarize(score = mean(value)) %>%
   ungroup() %>%
+  rename(facet_var = n_ahead) %>%
   plot_score("Weighted average conditional ranked probability score")
 ```
 
@@ -149,7 +182,7 @@ df_ps_weighted %>%
   group_by(id, n_ahead, variable) %>%
   summarize(score = mean(value)) %>%
   ungroup() %>%
-  plot_score_overall()
+  plot_score_overall(ylab = "Weighted average conditional ranked probability score")
 ```
 
 
@@ -169,6 +202,7 @@ df_cb %>%
   group_by(id, n_ahead, variable) %>%
   summarize(score = mean(value)) %>%
   ungroup() %>%
+  rename(facet_var = n_ahead) %>%
   plot_score(name = "Average probability to predict higher than observed value (%)",
              limits = c(0, 1), breaks = seq(0, 1, .25),
              labels = c("0.00 \n Under-predict", "0.25", "0.50 \n Well-calibrated", "0.75", "1.00 \n Over-predict"))
@@ -176,3 +210,19 @@ df_cb %>%
 
 
 ## Sharpness
+
+```{r}
+df %>%
+  dplyr::select(id, new_confirmed_ahead, n_ahead, arima, prophet, cori, population) %>%
+  rowwise() %>%
+  mutate_at(vars(arima, cori, prophet), ~ pred_score(., new_confirmed_ahead, population, 
+                                                     type = "sharpness", q = 0.25)) %>%
+  unnest(cols = c("n_ahead", "arima", "cori", "prophet")) %>%
+  dplyr::select(id, n_ahead, arima, cori, prophet) %>%
+  reshape2::melt(c("id", "n_ahead")) %>%
+  dplyr::filter(n_ahead %in% c(5, 10, 15)) %>%
+  group_by(id, n_ahead, variable) %>%
+  summarize(score = mean(value)) %>%
+  ungroup() %>%
+  plot_score_overall("Average length of 50% CrI")
+```

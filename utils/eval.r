@@ -6,7 +6,8 @@ pred_score <- function(
   X, # predicted target
   y, # observed target
   z = NULL, # values to normalize target (e.g. cumulative cases or pop)
-  type = "crps" # type of score (default: continuous ranked probability score)
+  type = "crps", # type of score (default: continuous ranked probability score)
+  ... # additional arguments to compute type of score
 ) {
   
   if (!is.null(z)) {
@@ -23,6 +24,11 @@ pred_score <- function(
   } 
   else if (type == "calibration") {
     score <- apply(Xy, 1, function(v) sum(v[length(v)] <= v[-length(v)]) / (length(v)-1))
+  } 
+  else if (type == "sharpness") {
+    args <- as.list(match.call())
+    q = args$q 
+    score <- apply(X, 1, function(x) quantile(x, 1-q) - quantile(x, q))
   }
   
   return(list(score))
@@ -32,8 +38,23 @@ pred_score <- function(
 
 plot_predict <- function(
   dat, # the data frame with columns id, date, variable, value
+  smoothing = NULL, # should date be smoothed? (default = NULL, i.e. no)
   interval = TRUE # plot with uncertainty intervals
 ) {
+  
+  if (!is.null(smoothing)) {
+    group_vars <- c("id", "variable")
+    if (!interval) { group_vars = c(group_vars, "n_ahead") }
+    dat <- dat %>%
+      group_by_at(c(group_vars, "date")) %>%
+      mutate(draw = 1:n()) %>%
+      ungroup() %>%
+      group_by_at(c(group_vars, "draw")) %>%
+      mutate(value = zoo::rollmean(value, k = smoothing, fill = NA, align = "center")) %>%
+      ungroup() %>%
+      na.omit()
+  }
+  
   
   dat_pred <- dplyr::filter(dat, variable != "observed")
   dat_obse <- dat %>%
@@ -51,7 +72,6 @@ plot_predict <- function(
       geom_line(data = dat_obse, size = 1) +
       scale_fill_brewer() +
       facet_wrap(~ id + variable, scales = "free_y") +
-      scale_color_viridis_c() +
       labs(y = "Number of new cases", color = "N") +
       theme_bw() +
       theme(axis.title.x = element_blank())
@@ -76,18 +96,19 @@ plot_predict <- function(
 
 
 plot_score <- function(
-  dat, # the data frame with columns id, variable, n_ahead, and score
+  dat, # the data frame with columns id, variable, facet_var, and score
+  facet_name = "#days ahead: ",
   ... # additional arguments to scale_fill_distiller
   
 ) {
   
   pl <- ggplot(dat, aes(x = id, y = variable, fill = score)) +
     geom_tile() +
-    facet_wrap(~ n_ahead, labeller = labeller(n_ahead = label_facet(dat$n_ahead))) +
+    facet_wrap(~ facet_var, labeller = labeller(facet_var = label_facet(dat$facet_var, facet_name))) +
     labs(y = "Model", x = "Country") +
     scale_fill_distiller(palette = "Spectral", ...) +
     theme_bw() +
-    theme(legend.position = "top", plot.margin=unit(c(0.25,1,0.25,0.25),"cm"))
+    theme(legend.position = "top", plot.margin = unit(c(0.25,1,0.25,0.25),"cm"))
   
   panel_width = unit(1,"npc") - sum(ggplotGrob(pl)[["widths"]][-3]) - unit(1,"line")
   pl <- pl + guides(fill = guide_colorbar(barwidth = panel_width, title.position = "top", title.hjust = 0.5))
@@ -97,19 +118,45 @@ plot_score <- function(
 }
 
 
-plot_score_overall <- function(
-  dat, # the data frame with columns id, variable, n_ahead, and score
-  weighted = FALSE # whether the scores were weighted
+plot_score.time <- function(
+  dat, # the data frame with columns date, variable, facet_var, and score
+  smoothing = NULL, # should date be smoothed? (default = NULL, i.e. no)
+  facet_name = "#days ahead: ",
+  ... # additional arguments to scale_y_continuous
 ) {
   
-  if (weighted) {ylab <- "Weighted average conditional ranked probability score"}
-  else {ylab <- "Average conditional ranked probability score"}
+  if (!is.null(smoothing)) {
+    dat <- dat %>%
+      group_by(variable, facet_var) %>%
+      mutate(score = zoo::rollmean(score, k = smoothing, align = "center", fill = NA)) %>%
+      ungroup() %>%
+      na.omit()
+  }
+  
+  pl <- ggplot(dat, aes(x = date, y = score, color = variable)) +
+    geom_line() +
+    facet_wrap(~ facet_var, labeller = labeller(facet_var = label_facet(dat$facet_var, facet_name))) +
+    labs(x = "Date", color = "Model") +
+    scale_y_continuous(...) +
+    scale_color_brewer(palette = "Dark2") +
+    theme_bw() +
+    theme(legend.position = "top")
+  
+  return(pl)
+  
+}
+
+
+plot_score_overall <- function(
+  dat, # the data frame with columns id, variable, n_ahead, and score
+  ylab = "Average conditional ranked probability score" # 
+) {
   
   pl <- ggplot(dat, aes(x = variable, y = score)) +
     geom_boxplot(stat = "boxplot", position = "dodge") +
     geom_jitter(alpha = .5, shape = 3) +
     facet_wrap(~ n_ahead, labeller = labeller(n_ahead = label_facet(dat$n_ahead))) +
-    labs(y = ylab, x = "#days ahead") +
+    labs(y = ylab, x = "Model") +
     theme_bw() +
     theme(legend.position = "top", legend.title = element_blank())
   
