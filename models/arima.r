@@ -3,7 +3,8 @@ library(rstan)
 
 train.arima <- function(
   y, # number of new confirmed cases
-  ... # additional model parameters
+  ... # additional parameters to auto.arima 
+  # note it is currently not possible to provide a seed to auto.sarima in the call to varstan
 ) {
   
   fit <- auto.sarima(y, ...)  

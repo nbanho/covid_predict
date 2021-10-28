@@ -75,7 +75,6 @@ run_prediction <- function() {
       if ("prophet" %in% models) {
         trained_prophet <- train(train_df_ctry120$date, train_df_ctry120$new_confirmed, method = "prophet", 
                                  cap = ctry_cap, mcmc.samples = n_sample, cores = n_chains,
-                                 show_messages = F, verbose = F,
                                  seed = seed12345)
         predicted_prophet <- predict(trained_prophet)
         test_df_ctry$prophet[[k]] <- matrix(predicted_prophet[1:nrow(pred_df), ], ncol = n_draws)
