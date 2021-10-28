@@ -2,7 +2,7 @@ run_prediction <- function() {
   
   # settings
   args <- commandArgs(trailingOnly = TRUE)
-  id_idx <- args[1:2]
+  id_idx <- as.numeric(args[1:2])
   models <- args[3:length(args)]
   source("settings/defaults.r")
   
@@ -37,13 +37,13 @@ run_prediction <- function() {
     
     # for EpiEstim, get all R estimates right away
     if ("cori" %in% models) {
-      
-      train_ctry <- train(df_ctry$date, df_ctry$new_confirmed, method = "cori")
+      trained_cori <- train(df_ctry$date, df_ctry$new_confirmed, method = "cori",
+                            n1 = cori.n1, n2 = cori.n2, seed = seed12345)
     }
     
+    # for prophet: set max cap a little bit above maximum observed incidence among all countries
     if ("prophet" %in% models) {
-      # for prophet: set max cap a little bit above maximum observed incidence among all countries
-      ctry_cap <- max_inc * df_ctry$population[1] / 1e5
+      ctry_cap <- prophet.max_inc * df_ctry$population[1] / 1e5
     }
     
     # array to store predictions
@@ -57,11 +57,8 @@ run_prediction <- function() {
       
       # train data
       train_df_ctry <- slice(df_ctry, 1:(n_train+k-1))
-      
-      if ("prophet" %in% models | "arima" %in% models) {
-        # use only last 4 months of data to fit arima and prophet
-        train_df_ctry120 <- tail(train_df_ctry, 120) 
-      }
+      # use only last 4 months of data to fit, cori will even take less
+      train_df_ctry120 <- tail(train_df_ctry, 120) 
       
       # test data
       pred_df <- slice(df_ctry, (n_train+k):(n_train+k-1+n_preds)) 
@@ -71,21 +68,21 @@ run_prediction <- function() {
         
         trained_arima <- train(train_df_ctry120$date, train_df_ctry120$new_confirmed, method = "arima", 
                                iter = n_sample)
-        predicted_arima <- predict(trained_arima)
-        test_df_ctry$arima[[k]] <- predicted_arima[1:nrow(pred_df), ]
+        predicted_arima <- predict(trained_arima,
+                                   seed = seed12345)
+        test_df_ctry$arima[[k]] <- matrix(predicted_arima[1:nrow(pred_df), ], ncol = n_draws)
       } 
       if ("prophet" %in% models) {
         trained_prophet <- train(train_df_ctry120$date, train_df_ctry120$new_confirmed, method = "prophet", 
-                                 cap = ctry_cap, mcmc.samples = n_sample)
+                                 cap = ctry_cap, mcmc.samples = n_sample, cores = n_chains,
+                                 show_messages = F, verbose = F,
+                                 seed = seed12345)
         predicted_prophet <- predict(trained_prophet)
-        test_df_ctry$prophet[[k]] <- predicted_prophet[1:nrow(pred_df), ]
+        test_df_ctry$prophet[[k]] <- matrix(predicted_prophet[1:nrow(pred_df), ], ncol = n_draws)
       }
       if ("cori" %in% models) {
-        train_df_ctry_cori <- slice(df_ctry, (k):(n_train+k-1))
-        trained_cori <- train(train_df_ctry_cori$date, train_df_ctry_cori$new_confirmed, method = "cori")
-        prev_inc <- create_inc(train_df_ctry_cori$new_confirmed, train_df_ctry_cori$date)
-        predicted_cori <- predict(trained_cori, inc = prev_inc, i = n_preds+k-1)
-        test_df_ctry$cori[[k]] <- predicted_cori[1:nrow(pred_df), ]
+        predicted_cori <- predict(trained_cori, i = n_preds+k-1, seed = seed12345)
+        test_df_ctry$cori[[k]] <- matrix(predicted_cori[1:nrow(pred_df), ], ncol = n_draws)
       }
     }
     

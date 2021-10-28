@@ -17,6 +17,10 @@ library(tidybayes)
 # default settings
 source("settings/defaults.r")
 
+# train and predict utils
+source("utils/train.r")
+source("utils/predict.r")
+
 # renewable equation model based on EpiEstim
 source("models/cori.r")
 source("utils/predict.r")
@@ -32,29 +36,103 @@ source("models/prophet.r")
 ## Data
 
 ```{r}
+# all data
 df <- read_csv("data/prep_jhu_all_countries.csv") %>%
-  dplyr::filter(id %in% c("ITA", "DEU"))
+    dplyr::filter(id %in% c("AUT", "BEL", "BGR", "CHE", "HRV", "CZE", "DNK", "EST", 
+                            "FIN", "FRA", "DEU", "GRC", "HUN", "IRL", "ITA", "LVA",
+                            "LTU", "NLD", "POL", "PRT", "ROU", "SVK",
+                            "SVN", "ESP", "SWE", "GBR"))
 
-countries <- unique(df$id)
+# country to test loop
+countries <- c("GBR")
+
+# subset to test how to
+BEL <- df %>%
+  dplyr::filter(id == "BEL") %>%
+  dplyr::filter(date >= "2020-09-01" & date <= "2021-01-01") %>%
+  dplyr::select(date, new_confirmed)
+BEL_train <- dplyr::filter(BEL, date <= "2020-10-20")
+BEL_test <- BEL %>% dplyr::filter(date > "2020-10-20") %>% head(21)
+```
+
+### New cases
+
+```{r}
+df %>% 
+  ggplot(aes(x = date, y = new_confirmed)) +
+  geom_line() +
+  facet_wrap(~ id, scales = "free_y")
+```
+
+### Determine cap
+
+```{r}
+df %>%
+  group_by(id) %>%
+  summarize(m = max(new_confirmed) / population[1] * 1e5) %>%
+  ungroup() %>%
+  ggplot(aes(x = id, y = m)) +
+  geom_bar(stat = "identity")
 ```
 
 ## EpiEstim 
 
-### Toy example
+### Under the hood
 
 ```{r}
-deu_first200 <- df %>%
-  dplyr::filter(id == "DEU") %>%
-  slice(1:200) 
-fit_first200 <- train.cori(deu_first200$new_confirmed)
+# configure serial interval
+config_si <- make_config(
+    method = "uncertain_si",
+    mean_si = 5.61,
+    std_mean_si = 0.30,
+    min_mean_si = 5.61 - 2,
+    max_mean_si = 5.61 + 2,
+    std_si = 4.83,
+    std_std_si = 0.37,
+    min_std_si = 4.83 - 2,
+    max_std_si = 4.83 + 2,
+    n1 = 100,
+    n2 = 40,
+    seed = 1)
+
+# Estimate R
+est_R <- estimate_R(
+  incid = BEL_train$new_confirmed,
+  method = "uncertain_si",
+  config = config_si)
+
+# Simulate plausible R
+mean_r <- tail(est_R$R$`Mean(R)`, 1)
+sd_r <- tail(est_R$R$`Std(R)`, 1)
+shapescale <- gamma_mucv2shapescale(mu = mean_r, cv = sd_r/mean_r)
+set.seed(1)
+plausible_r <- rgamma(4e3, shape = shapescale$shape, scale = shapescale$scale)
+  
+# make projections
+inc <- incidence(est_R$dates)
+inc$counts <- as.matrix(est_R$I)
+sis <- lapply(seq_len(nrow(est_R$si_distr)), function(i) est_R$si_distr[i, ])
+proj <- map(sis, function(S) as.matrix(project(x = inc, R = plausible_r, si = S[-1], n_sim = 40, n_days = 21)))
+proj <- do.call(cbind, proj)
+
+# compare with observed 
+BEL_pred <- cbind(date = BEL_test$date, data.frame(proj)) %>%
+  reshape2::melt(c("date")) 
+
+ggplot(mapping = aes(x = date)) +
+  stat_lineribbon(data = BEL_pred, mapping = aes(y = value)) +
+  geom_line(data = BEL_test, mapping = aes(y = new_confirmed)) +
+  scale_fill_brewer()
+```
+
+### Test functions
+
+```{r}
+# train
+cori.fit <- train.cori(BEL_train$new_confirmed, n1 = 100, n2 = 10, seed = 1)
 
 # predict
-deu_pred <- predict.cori(fit_first200, inc = create_inc(deu_first200$new_confirmed, deu_first200$date))
-deu_first221 <- df %>%
-  dplyr::filter(id == "DEU") %>%
-  slice(1:221) %>%
-  dplyr::select(date, new_confirmed)
-plot.predict(deu_first221$date, deu_first221$new_confirmed, deu_pred)
+cori.proj <- predict.cori(estimate_R_obj = cori.fit, d = 1e3, n = 21, seed = 1)
 ```
 
 ### Train & Pred
@@ -72,14 +150,12 @@ for (j in 1:length(countries)) {
   test_df_ctry <- slice(df_ctry, (n_train+1):nrow(df_ctry))
   
   # R estimates
-  train_ctry <- train.cori(df_ctry$new_confirmed)
+  trained_cori <- train(df_ctry$date, df_ctry$new_confirmed, method = "cori", n1 = 100, n2 = 10)
   
   # predictions
   pred_mat <- matrix(NA, ncol = n_preds, nrow = nrow(test_df_ctry))
   for (k in 1:nrow(test_df_ctry)) {
-    train_df_ctry <- slice(df_ctry, (k):(n_train+k-1))
-    prev_inc <- create_inc(train_df_ctry$new_confirmed, train_df_ctry$date)
-    preds <- predict.cori(estimate_R_obj = train_ctry, inc = prev_inc, n = n_preds, d = n_draws, i = n_preds+k-1)
+    preds <- predict(train_obj =  trained_cori, i = n_train + k - 1, n = n_preds, d = n_draws)
     mean_preds <- rowMeans(preds)
     pred_mat[k, ] <- mean_preds
   }
@@ -149,7 +225,8 @@ for (j in 1:length(countries)) {
   # predictions
   pred_mat <- matrix(NA, ncol = n_preds, nrow = nrow(test_df_ctry))
   for (k in 1:nrow(test_df_ctry)) {
-    train_df_ctry <- slice(df_ctry, 1:(n_train+k-1))
+    #train_df_ctry <- slice(df_ctry, 1:(n_train+k-1))
+    train_df_ctry <- slice(df_ctry, tail(1:(n_train+k-1), 120))
     trained_model <- train.arima(train_df_ctry$new_confirmed)
     preds <- predict.arima(trained_model)
     mean_preds <- rowMeans(preds)
@@ -263,4 +340,24 @@ ggplot() +
   labs(y = "Number of new cases", color = "N") +
   theme_bw() +
   theme(axis.title.x = element_blank())
+```
+
+
+## Gaussian Process
+
+```{r}
+library(plgp)
+library(mvtnorm)
+
+X <- df %>%
+  dplyr::filter(id == countries[1]) %>%
+  dplyr::select(new_confirmed) %>%
+  slice(1:100) %>%
+  as.matrix()
+n <- nrow(X)
+D <- distance(X)
+eps <- sqrt(.Machine$double.eps)
+Sigma <- exp(-D) + diag(eps, n)
+Y <- rmvnorm(4e3, mean = c(X), sigma = Sigma)
+plot(rowMeans(Y), type = "l")
 ```
