@@ -19,52 +19,43 @@ source("utils/eval.r")
 source("utils/delays.r")
 
 # helper
-source("utils/plotting.r")
+source("helper/plotting.r")
 ```
 
 ## Data
 
 ```{r}
-files <- list.files("predictions", pattern = ".rds", full.names = T)[1:3]
-df <- map(files, readRDS)
-df <- do.call(rbind, df)
-df <- df %>%
-  rowwise() %>%
-  mutate(max_N = ifelse(is.null(dim(arima)), 1, nrow(arima))) %>%
-  mutate(n_ahead = list(1:max_N)) %>%
-  mutate(date_ahead = list(date %m+% days(0:(max_N-1)))) 
-df$new_confirmed_ahead <- map2(df$id, df$date_ahead, function(i,d) {
-  df %>% dplyr::filter(id == i) %>% dplyr::filter(date %in% d) %>%
-    dplyr::select(new_confirmed) %>% unlist
-})
+files <- list.files("predictions", pattern = ".rds", full.names = T)
 ```
 
 
 ## Plot predict
 
 ```{r}
-df %>%
-  dplyr::filter(id == "BEL") %>%
+read_files(files[1]) %>%
+  get_max_N() %>%
+  get_dates_ahead() %>%
+  get_target_ahead() %>%
   dplyr::filter(max_N >= 11) %>%
   rowwise() %>%
   mutate_at(vars(arima, cori, prophet), ~ list(.[11,1:1000])) %>% # temporary fix
   mutate_at(vars(date_ahead, new_confirmed_ahead), ~ list(.[11])) %>% 
   unnest(cols = c("date_ahead", "new_confirmed_ahead", "arima", "cori", "prophet")) %>%
-  dplyr::select(id, date_ahead, new_confirmed_ahead, arima, cori, prophet) %>%
+  dplyr::select(date_ahead, new_confirmed_ahead, arima, cori, prophet) %>%
   rename(date = date_ahead, observed = new_confirmed_ahead) %>%
-  dplyr::select(-cori) %>%
-  reshape2::melt(c("id", "date")) %>%
+  reshape2::melt(c("date")) %>%
   plot_predict(interval = T, smoothing = 7)
   
-df %>%
-  dplyr::filter(id %in% c("BEL", "AUT")) %>%
-  dplyr::filter(max_N >= 2) %>% # temporary fix (N = 1 does not work without t(as.matrix(x)))
+read_files(files[1]) %>%
+  get_max_N() %>%
+  get_n_ahead() %>%
+  get_dates_ahead() %>%
+  get_target_ahead() %>%
   rowwise() %>%
   mutate_at(vars(arima, cori, prophet), ~ list(apply(., 1, mean))) %>% # temporary fix 
   unnest(cols = c("date_ahead", "new_confirmed_ahead", "n_ahead", "arima", "cori", "prophet")) %>%
   dplyr::select(id, date_ahead, new_confirmed_ahead, n_ahead, arima, cori, prophet) %>%
   rename(date = date_ahead, observed = new_confirmed_ahead) %>%
-  dplyr::select(-cori) %>%
   reshape2::melt(c("id", "date", "n_ahead")) %>%
   plot_predict(interval = F, smoothing = 7)
 ```
@@ -73,11 +64,18 @@ df %>%
 ## Prediction score
 
 ```{r}
-df_ps <- df %>%
-  dplyr::select(id, new_confirmed_ahead, date_ahead, n_ahead, arima, prophet, cori, population) %>%
-  rowwise() %>%
-  mutate_at(vars(arima, cori, prophet), ~ pred_score(., new_confirmed_ahead, population)) %>%
-  unnest(cols = c("n_ahead", "date_ahead", "new_confirmed_ahead", "arima", "cori", "prophet"))
+df_ps <- do.call(rbind, map(files[1:2], function(f) {
+  print(sprintf("Processing file %s", f))
+  read_files(f) %>%
+    get_max_N() %>%
+    get_n_ahead() %>%
+    get_dates_ahead() %>%
+    get_target_ahead() %>%
+    dplyr::select(id, new_confirmed_ahead, date_ahead, n_ahead, arima, prophet, cori, population) %>%
+    rowwise() %>%
+    mutate_at(vars(arima, cori, prophet), ~ pred_score(., new_confirmed_ahead, population)) %>%
+    unnest(cols = c("n_ahead", "date_ahead", "new_confirmed_ahead", "arima", "cori", "prophet"))
+}))
 ```
 
 
@@ -122,6 +120,7 @@ df_ps %>%
   dplyr::select(id, date_ahead, arima, prophet) %>%
   reshape2::melt(c("id", "date_ahead")) %>%
   rename(facet_var = id, date = date_ahead, score = value) %>%
+  mutate(score = as.numeric(score)) %>%
   plot_score.time(smoothing = 7, facet_name = "", 
                   name = "Average conditional ranked probability score for N = 10")
 ```
@@ -169,7 +168,7 @@ df_ps_weighted %>%
   summarize(score = mean(value)) %>%
   ungroup() %>%
   rename(facet_var = n_ahead) %>%
-  plot_score("Weighted average conditional ranked probability score")
+  plot_score("Weighted average CRPS")
 ```
 
 ### Overall
@@ -188,12 +187,27 @@ df_ps_weighted %>%
 
 ## Calibration
 
+### Coverage
+
 ```{r}
-df_cb <- df %>%
-  dplyr::select(id, new_confirmed_ahead, n_ahead, arima, prophet, cori, population) %>%
-  rowwise() %>%
-  mutate_at(vars(arima, cori, prophet), ~ pred_score(., new_confirmed_ahead, type = "calibration")) %>%
-  unnest(cols = c("n_ahead", "arima", "cori", "prophet"))
+# TODO
+```
+
+### Bias
+
+```{r}
+df_cb <- do.call(rbind, map(files[1:2], function(f) {
+  print(sprintf("Processing file %s", f))
+  read_files(f) %>%
+    get_max_N() %>%
+    get_n_ahead() %>%
+    get_dates_ahead() %>%
+    get_target_ahead() %>%
+    dplyr::select(id, new_confirmed_ahead, date_ahead, n_ahead, arima, prophet, cori, population) %>%
+    rowwise() %>%
+    mutate_at(vars(arima, cori, prophet), ~ pred_score(., new_confirmed_ahead, type = "bias")) %>%
+    unnest(cols = c("n_ahead", "date_ahead", "new_confirmed_ahead", "arima", "cori", "prophet"))
+}))
 
 df_cb %>%
   dplyr::select(id, n_ahead, arima, cori, prophet) %>%
@@ -212,12 +226,21 @@ df_cb %>%
 ## Sharpness
 
 ```{r}
-df %>%
-  dplyr::select(id, new_confirmed_ahead, n_ahead, arima, prophet, cori, population) %>%
-  rowwise() %>%
-  mutate_at(vars(arima, cori, prophet), ~ pred_score(., new_confirmed_ahead, population, 
+df_sp <- do.call(rbind, map(files[1:2], function(f) {
+  print(sprintf("Processing file %s", f))
+  read_files(f) %>%
+    get_max_N() %>%
+    get_n_ahead() %>%
+    get_dates_ahead() %>%
+    get_target_ahead() %>%
+    dplyr::select(id, new_confirmed_ahead, date_ahead, n_ahead, arima, prophet, cori, population) %>%
+    rowwise() %>%
+    mutate_at(vars(arima, cori, prophet), ~ pred_score(., new_confirmed_ahead, population, 
                                                      type = "sharpness", q = 0.25)) %>%
-  unnest(cols = c("n_ahead", "arima", "cori", "prophet")) %>%
+    unnest(cols = c("n_ahead", "date_ahead", "new_confirmed_ahead", "arima", "cori", "prophet"))
+}))
+
+df_sp %>%
   dplyr::select(id, n_ahead, arima, cori, prophet) %>%
   reshape2::melt(c("id", "n_ahead")) %>%
   dplyr::filter(n_ahead %in% c(5, 10, 15)) %>%

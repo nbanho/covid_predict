@@ -2,6 +2,27 @@ library(scoringRules)
 library(tidybayes)
 
 
+# read files
+read_files <- function(f) { do.call(rbind, map(f, readRDS)) }
+
+# determine maximum days ahead forecast
+get_max_N <- function(D) { D %>% rowwise() %>% mutate(max_N = ifelse(is.null(dim(arima)), 1, nrow(arima))) }
+
+# get number of days predicted ahead as list
+get_n_ahead <- function(D) { D %>% rowwise() %>% mutate(n_ahead = list(1:max_N)) }
+
+# get dates corresponding to days ahead 
+get_dates_ahead <- function(D) { D %>% rowwise() %>% mutate(date_ahead = list(date %m+% days(0:(max_N-1)))) }
+
+# get target ahead
+get_target_ahead <- function(D, target = "new_confirmed") { 
+  D[[paste0(target, "_ahead")]] <- map2(D$id, D$date_ahead, function(i,d) {
+    D %>% dplyr::filter(id == i) %>% dplyr::filter(date %in% d) %>%
+      dplyr::select(target) %>% unlist
+  })
+  return(D)
+}
+
 pred_score <- function(
   X, # predicted target
   y, # observed target
@@ -22,7 +43,7 @@ pred_score <- function(
   if (type == "crps") {
     score <- apply(Xy, 1, function(v) scoringRules::crps_sample(v[length(v)], v[-length(v)]))
   } 
-  else if (type == "calibration") {
+  else if (type == "bias") {
     score <- apply(Xy, 1, function(v) sum(v[length(v)] <= v[-length(v)]) / (length(v)-1))
   } 
   else if (type == "sharpness") {
@@ -43,7 +64,7 @@ plot_predict <- function(
 ) {
   
   if (!is.null(smoothing)) {
-    group_vars <- c("id", "variable")
+    group_vars <- "variable"
     if (!interval) { group_vars = c(group_vars, "n_ahead") }
     dat <- dat %>%
       group_by_at(c(group_vars, "date")) %>%
@@ -59,8 +80,8 @@ plot_predict <- function(
   dat_pred <- dplyr::filter(dat, variable != "observed")
   dat_obse <- dat %>%
     dplyr::filter(variable == "observed") %>%
-    dplyr::select(id, date, value) %>%
-    group_by(id, date) %>%
+    dplyr::select(date, value) %>%
+    group_by(date) %>%
     slice(1) %>%
     ungroup()
   
@@ -71,7 +92,7 @@ plot_predict <- function(
       stat_lineribbon(data = dat_pred, .width = c(.99, .95, .8, .5), color = "#08519C") +
       geom_line(data = dat_obse, size = 1) +
       scale_fill_brewer() +
-      facet_wrap(~ id + variable, scales = "free_y") +
+      facet_wrap(~ variable, scales = "free_y") +
       labs(y = "Number of new cases", color = "N") +
       theme_bw() +
       theme(axis.title.x = element_blank())
@@ -82,7 +103,7 @@ plot_predict <- function(
     pl <- ggplot(mapping = aes(x = date, y = value)) +
       geom_line(data = dat_pred, mapping = aes(color = n_ahead, group = n_ahead)) +
       geom_line(data = dat_obse, color = "black") +
-      facet_wrap(~ id + variable, scales = "free_y") +
+      facet_wrap(~ variable, scales = "free_y") +
       scale_color_viridis_c() +
       labs(y = "Number of new cases", color = "N") +
       theme_bw() +
@@ -105,7 +126,7 @@ plot_score <- function(
   pl <- ggplot(dat, aes(x = id, y = variable, fill = score)) +
     geom_tile() +
     facet_wrap(~ facet_var, labeller = labeller(facet_var = label_facet(dat$facet_var, facet_name))) +
-    labs(y = "Model", x = "Country") +
+    labs(y = "variable", x = "Country") +
     scale_fill_distiller(palette = "Spectral", ...) +
     theme_bw() +
     theme(legend.position = "top", plot.margin = unit(c(0.25,1,0.25,0.25),"cm"))
@@ -136,7 +157,7 @@ plot_score.time <- function(
   pl <- ggplot(dat, aes(x = date, y = score, color = variable)) +
     geom_line() +
     facet_wrap(~ facet_var, labeller = labeller(facet_var = label_facet(dat$facet_var, facet_name))) +
-    labs(x = "Date", color = "Model") +
+    labs(x = "Date", color = "variable") +
     scale_y_continuous(...) +
     scale_color_brewer(palette = "Dark2") +
     theme_bw() +
@@ -156,7 +177,7 @@ plot_score_overall <- function(
     geom_boxplot(stat = "boxplot", position = "dodge") +
     geom_jitter(alpha = .5, shape = 3) +
     facet_wrap(~ n_ahead, labeller = labeller(n_ahead = label_facet(dat$n_ahead))) +
-    labs(y = ylab, x = "Model") +
+    labs(y = ylab, x = "variable") +
     theme_bw() +
     theme(legend.position = "top", legend.title = element_blank())
   
@@ -172,7 +193,7 @@ plot_calibration <- function(
   pl <- ggplot(dat, aes(x = id, y = variable, fill = mean_value)) +
     geom_tile() +
     facet_wrap(~ n_ahead, labeller = labeller()) +
-    labs(y = "Model", x = "Country",
+    labs(y = "variable", x = "Country",
          fill = "Average probability to predict higher than observed value (%)") +
     scale_fill_distiller(palette = "Spectral", limits = c(0, 1), breaks = seq(0, 1, .25),
                          labels = c("0.00 \n Under-predict", "0.25", 
