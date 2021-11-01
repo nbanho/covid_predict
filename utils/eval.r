@@ -58,7 +58,7 @@ pred_score <- function(
     args <- as.list(match.call())
     q = args$q 
     score <- apply(X, 1, function(x) quantile(x, 1-q) - quantile(x, q))
-  }
+  } 
   
   return(list(score))
   
@@ -194,26 +194,54 @@ plot_score_overall <- function(
 }
 
 
-plot_calibration <- function(
-  dat # the data frame with columns id, n_ahead, variable, and score
+plot_score.incidence <- function(
+  dat, # the data frame with columns variable, facet_var, incidence, mean_score, sd_score
+  facet_name = "#days ahead: ", # prefix for facet_var
+  ... # additional arguments to scale_y_continuous
 ) {
   
-  pl <- ggplot(dat, aes(x = id, y = variable, fill = mean_value)) +
-    geom_tile() +
-    facet_wrap(~ n_ahead, labeller = labeller()) +
-    labs(y = "variable", x = "Country",
-         fill = "Average probability to predict higher than observed value (%)") +
-    scale_fill_distiller(palette = "Spectral", limits = c(0, 1), breaks = seq(0, 1, .25),
-                         labels = c("0.00 \n Under-predict", "0.25", 
-                                    "0.50 \n Well-calibrated", 
-                                    "0.75", "1.00 \n Over-predict")) +
+  pl <- ggplot(dat, aes(x = incidence, color = variable)) +
+    geom_errorbar(aes(ymin = mean_score - sd_score, ymax = mean_score + sd_score), width = 5) +
+    geom_line(aes(y = mean_score)) + 
+    geom_point(aes(y = mean_score)) +
+    facet_wrap(~ facet_var, labeller = labeller(facet_var = label_facet(dat$facet_var, facet_name))) +
+    labs(x = "Incidence") +
+    scale_y_continuous(...) +
+    scale_color_brewer(palette = "Dark2") +
     theme_bw() +
-    theme(legend.position = "top",
-          plot.margin=unit(c(0.25,1,0.25,0.25),"cm"))
-  
-  panel_width = unit(1,"npc") - sum(ggplotGrob(pl)[["widths"]][-3]) - unit(1,"line")
-  pl <- pl + guides(fill = guide_colorbar(barwidth = panel_width, title.position = "top", title.hjust = 0.5))
+    theme(legend.position = "top", legend.title = element_blank())
   
   return(pl)
+  
+}
+
+
+is_peak <- function(
+  x, # target
+  t = 28, # number of days to the left and right to determine peak
+  min_x, # minimum target value
+  z = NULL, # normalizer 
+  na_value = F # value for resulting Nas
+) {
+  
+  if (!is.null(z)) {
+    x <- x / z
+  }
+  
+  n <- length(x)
+  isp <- logical(n)
+  isp[1:t] <- na_value
+  isp[(n-t+1):n] <- na_value
+  for (i in (t):(n-t)) {
+    left_x <- x[(i-t):(i-1)]
+    right_x <- x[(i+1):(i+t)]
+    if (all(c(left_x, right_x) < x[i]) & x[i] > min_x) {
+      isp[i] <- T
+    } else {
+      isp[i] <- F
+    }
+  } 
+  
+  return(isp)
   
 }

@@ -61,7 +61,7 @@ read_files(files[1]) %>%
 ```
 
 
-## Prediction score
+## CRPS
 
 ```{r}
 df_ps <- do.call(rbind, map(files[1:2], function(f) {
@@ -112,7 +112,7 @@ df_ps %>%
 ```
 
 
-### Over time
+### By time
 
 ```{r}
 df_ps %>%
@@ -125,8 +125,25 @@ df_ps %>%
                   name = "Average conditional ranked probability score for N = 10")
 ```
 
+### By incidence
 
-### Overall by N
+```{r}
+df_ps %>%
+  dplyr::filter(n_ahead %in% c(5, 11, 15)) %>%
+  mutate(incidence = new_confirmed_ahead / population * 1e5) %>%
+  mutate(incidence = as.numeric(as.character(cut(incidence, breaks = seq(0, 200, 20), labels = seq(20, 200, 20))))) %>%
+  dplyr::select(id, incidence, n_ahead, arima, cori, prophet) %>%
+  reshape2::melt(c("id", "incidence", "n_ahead")) %>%
+  group_by(incidence, n_ahead, variable) %>%
+  summarize(mean_score = as.numeric(mean(value)),
+            sd_score = as.numeric(sd(value))) %>%
+  ungroup() %>%
+  rename(facet_var = n_ahead) %>%
+  plot_score.incidence(name = "Average CRPS")
+```
+
+
+### By N (overall)
 
 ```{r}
 df_ps %>%
@@ -140,7 +157,7 @@ df_ps %>%
 ```
 
 
-## Weighted pred error
+## Weighted CRPS
 
 ```{r}
 WM <- data_delay(30, T, p_in, mu = rnorm(1e4, 10.92, 0.94), sigma = rnorm(1e4, 5.41, 0.27))
@@ -215,6 +232,47 @@ df_co %>%
              labels = function(x) x * 100)
 ```
 
+#### By incidence
+
+```{r}
+df_co %>%
+  dplyr::filter(n_ahead %in% c(5, 11, 15)) %>%
+  mutate(incidence = new_confirmed_ahead / population * 1e5) %>%
+  mutate(incidence = as.numeric(as.character(cut(incidence, breaks = seq(0, 200, 20), labels = seq(20, 200, 20))))) %>%
+  dplyr::select(id, incidence, n_ahead, arima, cori, prophet) %>%
+  reshape2::melt(c("id", "incidence", "n_ahead")) %>%
+  group_by(incidence, n_ahead, variable) %>%
+  summarize(mean_score = as.numeric(mean(value)),
+            sd_score = as.numeric(sd(value))) %>%
+  ungroup() %>%
+  rename(facet_var = n_ahead) %>%
+  plot_score.incidence(name = "Coverage for 50%-CrI (%)", labels = function(x) x * 100)
+```
+
+#### By peak
+
+```{r}
+df_co %>%
+  dplyr::filter(n_ahead == 11) %>%
+  group_by(id, n_ahead) %>%
+  arrange(date_ahead) %>%
+  mutate(peak = is_peak(new_confirmed_ahead, min_x = 30, z = population / 1e5)) %>%
+  ungroup() %>%
+  dplyr::filter(peak) %>%
+  group_by(id, n_ahead) %>%
+  mutate(peak_n = 1:n()) %>%
+  dplyr::select(id, peak_n, n_ahead, arima, cori, prophet) %>%
+  reshape2::melt(c("id", "peak_n", "n_ahead")) %>%
+  mutate(score = ifelse(as.numeric(value) == 1, "Yes", "No")) %>%
+  ggplot(aes(x = peak_n, y = id, shape = score)) +
+  geom_point(size = 4) +
+  scale_shape_manual(values = c(1, 4)) +
+  scale_x_continuous(breaks = 1:5) +
+  facet_wrap(~ variable) +
+  labs(shape = "Coverage", x = "Peak number", title = "Epidemic peak covered by 11-day ahead forecast") +
+  theme(axis.title.y = element_blank())
+```
+
 ### Bias
 
 ```{r}
@@ -245,6 +303,24 @@ df_cb %>%
 ```
 
 
+#### By incidence
+
+```{r}
+df_cb %>%
+  dplyr::filter(n_ahead %in% c(5, 11, 15)) %>%
+  mutate(incidence = new_confirmed_ahead / population * 1e5) %>%
+  mutate(incidence = as.numeric(as.character(cut(incidence, breaks = seq(0, 200, 20), labels = seq(20, 200, 20))))) %>%
+  dplyr::select(id, incidence, n_ahead, arima, cori, prophet) %>%
+  reshape2::melt(c("id", "incidence", "n_ahead")) %>%
+  group_by(incidence, n_ahead, variable) %>%
+  summarize(mean_score = as.numeric(mean(1-value)),
+            sd_score = as.numeric(sd(1-value))) %>%
+  ungroup() %>%
+  rename(facet_var = n_ahead) %>%
+  plot_score.incidence(name = "Prob. to predict above incidence (%)", labels = function(x) x * 100)
+```
+
+
 ## Sharpness
 
 ```{r}
@@ -257,7 +333,7 @@ df_sp <- do.call(rbind, map(files[1:2], function(f) {
     get_target_ahead() %>%
     dplyr::select(id, new_confirmed_ahead, date_ahead, n_ahead, arima, prophet, cori, population) %>%
     rowwise() %>%
-    mutate_at(vars(arima, cori, prophet), ~ pred_score(., new_confirmed_ahead, population, 
+    mutate_at(vars(arima, cori, prophet), ~ pred_score(., new_confirmed_ahead, population / 1e5, 
                                                      type = "sharpness", q = 0.25)) %>%
     unnest(cols = c("n_ahead", "date_ahead", "new_confirmed_ahead", "arima", "cori", "prophet"))
 }))
@@ -271,3 +347,6 @@ df_sp %>%
   ungroup() %>%
   plot_score_overall("Average length of 50% CrI")
 ```
+
+
+
