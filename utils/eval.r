@@ -46,6 +46,14 @@ pred_score <- function(
   else if (type == "bias") {
     score <- apply(Xy, 1, function(v) sum(v[length(v)] <= v[-length(v)]) / (length(v)-1))
   } 
+  else if (type == "coverage") {
+    score <- apply(Xy, 1, function(v) {
+      y <- v[length(v)]
+      x <- v[-length(v)]
+      qs <- quantile(x)
+      return( (y >= qs[2]) & (y <= qs[4]) )
+    })
+  }
   else if (type == "sharpness") {
     args <- as.list(match.call())
     q = args$q 
