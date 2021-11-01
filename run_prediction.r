@@ -57,31 +57,41 @@ run_prediction <- function() {
       
       # train data
       train_df_ctry <- slice(df_ctry, 1:(n_train+k-1))
-      # use only last 4 months of data to fit, cori will even take less
-      train_df_ctry120 <- tail(train_df_ctry, 120) 
+      # use only last 3 months to fit model, except cori, which uses even less
+      train_df_ctry_last <- tail(train_df_ctry, 90) 
       
       # test data
-      pred_df <- slice(df_ctry, (n_train+k):(n_train+k-1+n_preds)) 
+      pred_df <- slice(test_df_ctry, k:(k-1+n_preds)) 
       
       # train and predict
       if ("arima" %in% models) {
         
-        trained_arima <- train(train_df_ctry120$date, train_df_ctry120$new_confirmed, method = "arima", 
+        trained_arima <- train(train_df_ctry_last$date, 
+                               train_df_ctry_last$new_confirmed, 
+                               method = "arima", 
                                iter = n_sample)
         predicted_arima <- predict(trained_arima,
                                    seed = seed12345)
-        test_df_ctry$arima[[k]] <- matrix(predicted_arima[1:nrow(pred_df), ], ncol = n_draws)
+        test_df_ctry$arima[[k]] <- matrix(predicted_arima[1:nrow(pred_df), ], 
+                                          ncol = n_draws)
       } 
       if ("prophet" %in% models) {
-        trained_prophet <- train(train_df_ctry120$date, train_df_ctry120$new_confirmed, method = "prophet", 
-                                 cap = ctry_cap, mcmc.samples = n_sample, cores = n_chains,
+        trained_prophet <- train(train_df_ctry_last$date, 
+                                 train_df_ctry_last$new_confirmed, 
+                                 method = "prophet", 
+                                 cap = ctry_cap, 
+                                 mcmc.samples = n_sample, cores = n_chains,
                                  seed = seed12345)
         predicted_prophet <- predict(trained_prophet)
-        test_df_ctry$prophet[[k]] <- matrix(predicted_prophet[1:nrow(pred_df), ], ncol = n_draws)
+        test_df_ctry$prophet[[k]] <- matrix(predicted_prophet[1:nrow(pred_df), ], 
+                                            ncol = n_draws)
       }
       if ("cori" %in% models) {
-        predicted_cori <- predict(trained_cori, i = n_preds+k-1, seed = seed12345)
-        test_df_ctry$cori[[k]] <- matrix(predicted_cori[1:nrow(pred_df), ], ncol = n_draws)
+        predicted_cori <- predict(trained_cori, 
+                                  i = n_train+k-1,
+                                  seed = seed12345)
+        test_df_ctry$cori[[k]] <- matrix(predicted_cori[1:nrow(pred_df), ], 
+                                         ncol = n_draws)
       }
     }
     

@@ -185,7 +185,7 @@ df_ps_weighted %>%
   summarize(score = mean(value)) %>%
   ungroup() %>%
   rename(facet_var = n_ahead) %>%
-  plot_score("Weighted average CRPS")
+  plot_score(name = "Weighted average CRPS")
 ```
 
 ### Overall
