@@ -33,7 +33,13 @@ run_prediction <- function() {
     df_ctry <- subset(df, id == ctry)
     
     # test data
-    test_df_ctry <- slice(df_ctry, (n_train+1):nrow(df_ctry))
+    test_df_ctry <- df_ctry %>%
+      slice((n_train+1):nrow(df_ctry)) %>%
+      as_tibble() %>%
+      mutate(n_ahead = list(NA), date_ahead = list(NA), new_confirmed_ahead = list(NA)) 
+    if ("arima" %in% models) { test_df_ctry$arima <- list(NA) }
+    if ("cori" %in% models) { test_df_ctry$cori <- list(NA) }
+    if ("prophet" %in% models) { test_df_ctry$prophet <- list(NA) }
     
     # for EpiEstim, get all R estimates right away
     if ("cori" %in% models) {
@@ -46,12 +52,6 @@ run_prediction <- function() {
       ctry_cap <- prophet.max_inc * df_ctry$population[1] / 1e5
     }
     
-    # array to store predictions
-    test_df_ctry <- as_tibble(test_df_ctry)
-    if ("arima" %in% models) { test_df_ctry$arima <- list(NA) }
-    if ("prophet" %in% models) { test_df_ctry$arima <- list(NA) }
-    if ("cori" %in% models) { test_df_ctry$arima <- list(NA) }
-    
     # loop over test set
     for (k in 1:nrow(test_df_ctry)) {
       
@@ -62,6 +62,10 @@ run_prediction <- function() {
       
       # test data
       pred_df <- slice(test_df_ctry, k:(k-1+n_preds)) 
+      max_n <- nrow(pred_df)
+      test_df_ctry$n_ahead[[k]] <- 1:max_n
+      test_df_ctry$date_ahead[[k]] <- pred_df$date
+      test_df_ctry$new_confirmed_ahead[[k]] <- pred_df$new_confirmed
       
       # train and predict
       if ("arima" %in% models) {
@@ -72,8 +76,7 @@ run_prediction <- function() {
                                iter = n_sample)
         predicted_arima <- predict(trained_arima,
                                    seed = seed12345)
-        test_df_ctry$arima[[k]] <- matrix(predicted_arima[1:nrow(pred_df), ], 
-                                          ncol = n_draws)
+        test_df_ctry$arima[[k]] <- matrix(predicted_arima[1:max_n, ], ncol = n_draws)
       } 
       if ("prophet" %in% models) {
         trained_prophet <- train(train_df_ctry_last$date, 
@@ -83,19 +86,21 @@ run_prediction <- function() {
                                  mcmc.samples = n_sample, cores = n_chains,
                                  seed = seed12345)
         predicted_prophet <- predict(trained_prophet)
-        test_df_ctry$prophet[[k]] <- matrix(predicted_prophet[1:nrow(pred_df), ], 
-                                            ncol = n_draws)
+        test_df_ctry$prophet[[k]] <- matrix(predicted_prophet[1:max_n, ], ncol = n_draws)
       }
       if ("cori" %in% models) {
         predicted_cori <- predict(trained_cori, 
                                   i = n_train+k-1,
                                   seed = seed12345)
-        test_df_ctry$cori[[k]] <- matrix(predicted_cori[1:nrow(pred_df), ], 
-                                         ncol = n_draws)
+        test_df_ctry$cori[[k]] <- matrix(predicted_cori[1:max_n, ], ncol = n_draws)
       }
     }
     
     # save
+    test_df_ctry <- test_df_ctry %>%
+      dplyr::select(-date, -new_confirmed) %>%
+      rename(date = date_ahead, new_confirmed = new_confirmed_ahead, n = n_ahead) %>%
+      dplyr::select(id, population, n, date, new_confirmed, all_of(models))
     saveRDS(test_df_ctry, paste0("predictions/", ctry, ".rds"))
   }
   
