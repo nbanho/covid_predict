@@ -34,126 +34,147 @@ files <- list.files("predictions", pattern = ".rds", full.names = T)
 ```{r}
 read_files(files[1]) %>%
   get_max_N() %>%
-  get_dates_ahead() %>%
-  get_target_ahead() %>%
   dplyr::filter(max_N >= 11) %>%
   rowwise() %>%
   mutate_at(vars(arima, cori, prophet), ~ list(.[11,1:1000])) %>% # temporary fix
-  mutate_at(vars(date_ahead, new_confirmed_ahead), ~ list(.[11])) %>% 
-  unnest(cols = c("date_ahead", "new_confirmed_ahead", "arima", "cori", "prophet")) %>%
-  dplyr::select(date_ahead, new_confirmed_ahead, arima, cori, prophet) %>%
-  rename(date = date_ahead, observed = new_confirmed_ahead) %>%
+  mutate_at(vars(date, new_confirmed), ~ list(.[11])) %>% 
+  unnest(cols = c("date", "new_confirmed", "arima", "cori", "prophet")) %>%
+  dplyr::select(date, new_confirmed, arima, cori, prophet) %>%
   reshape2::melt(c("date")) %>%
   plot_predict(interval = T, smoothing = 7)
   
 read_files(files[1]) %>%
-  get_max_N() %>%
-  get_n_ahead() %>%
-  get_dates_ahead() %>%
-  get_target_ahead() %>%
   rowwise() %>%
-  mutate_at(vars(arima, cori, prophet), ~ list(apply(., 1, mean))) %>% # temporary fix 
-  unnest(cols = c("date_ahead", "new_confirmed_ahead", "n_ahead", "arima", "cori", "prophet")) %>%
-  dplyr::select(id, date_ahead, new_confirmed_ahead, n_ahead, arima, cori, prophet) %>%
-  rename(date = date_ahead, observed = new_confirmed_ahead) %>%
-  reshape2::melt(c("id", "date", "n_ahead")) %>%
+  mutate_at(vars(arima, cori, prophet), ~ list(apply(., 1, mean))) %>%
+  unnest(cols = c("date", "new_confirmed", "n", "arima", "cori", "prophet")) %>%
+  dplyr::select(id, date, new_confirmed, n, arima, cori, prophet) %>%
+  reshape2::melt(c("id", "date", "n")) %>%
   plot_predict(interval = F, smoothing = 7)
+```
+
+
+## Calibration
+
+### Probabilistic
+
+```{r}
+df_pCalib <- do.call(rbind, map(files[1:2], function(f) {
+  print(sprintf("Processing file %s", f))
+  read_files(f) %>%
+    dplyr::select(id, population, new_confirmed, date, n, arima, prophet, cori) %>%
+    rowwise() %>%
+    mutate_at(vars(arima, cori, prophet), ~ pred_score(., y = new_confirmed, 
+                                                       z = population / 1e5,
+                                                       type = "calibration")) %>%
+    unnest(cols = c("n", "date", "new_confirmed", "arima", "cori", "prophet"))
+}))
+
+df_pCalib %>%
+  dplyr::filter(n %in% c(1, 7, 14, 21)) %>%
+  dplyr::select(n, arima, cori, prophet) %>%
+  reshape2::melt("n") %>%
+  ggplot(aes(x = value)) +
+  facet_wrap(~ n + variable, ncol = 3) +
+  geom_histogram() +
+  labs(x = "F(x)", y = "Frequency") +
+  theme_bw()
+```
+
+
+### Marginal
+
+```{r}
+Gx <- df_pCalib %>%
+  group_by(id, date) %>% 
+  summarize(incidence = new_confirmed[1] / population * 1e5) %>%
+  ungroup() %>%
+  group_by(id) %>%
+  mutate(Gx = ecdf(.$incidence)(incidence)) %>%
+  ungroup() 
+
+df_mCalib <- df_pCalib %>%
+  left_join(Gx) %>%
+  mutate_at(vars(arima, cori, prophet), ~ . - Gx) %>%
+  mutate(incidence = as.numeric(as.character(cut(incidence, 
+                                                 breaks = c(seq(0, 100, 10), seq(125, 200, 25)), 
+                                                 labels = c(seq(10, 100, 10), seq(125, 200, 25)))))) %>%
+  dplyr::select(n, incidence, arima, cori, prophet) %>%
+  reshape2::melt(c("n", "incidence")) %>%
+  group_by(n, incidence, variable) %>%
+  summarize(value = mean(value)) %>%
+  ungroup() 
+
+df_mCalib %>%
+  dplyr::filter(n %in% c(1, 7, 14, 21)) %>%
+  ggplot(aes(x = incidence, y = value, color = variable)) +
+  geom_line() +
+  facet_wrap(~ n) +
+  geom_hline(aes(yintercept = 0), linetype = "dotted") +
+  scale_color_brewer(palette = "Dark2") +
+  labs(x = "Incidence (x = cases per 100,000 pop.)", 
+       y = "F(x) - G(X)") +
+  theme_bw() +
+  theme(legend.position = "top", legend.title = element_blank())
+```
+
+
+## Sharpness
+
+```{r}
+df_sharp <- do.call(rbind, map(files[1:2], function(f) {
+  print(sprintf("Processing file %s", f))
+  read_files(f) %>%
+    dplyr::select(id, new_confirmed, date, n, arima, prophet, cori, population) %>%
+    rowwise() %>%
+    mutate_at(vars(arima, cori, prophet), list(Q50 = ~ pred_score(., new_confirmed, 
+                                                             population / 1e5, 
+                                                             type = "sharpness", 
+                                                             q = 0.25))) %>%
+    mutate_at(vars(arima, cori, prophet), list(Q90 = ~ pred_score(., new_confirmed, 
+                                                             population / 1e5, 
+                                                             type = "sharpness", 
+                                                             q = 0.05))) %>%
+    dplyr::select(-arima, -cori, -prophet) %>%
+    unnest(cols = c("n", "date", "new_confirmed", 
+                    "arima_Q50", "cori_Q50", "prophet_Q50",
+                    "arima_Q90", "cori_Q90", "prophet_Q90"))
+}))
+
+df_sharp %>%
+  dplyr::filter(n %in% c(1, 7, 14, 21)) %>%
+  reshape2::melt(c("id", "n", "date", "new_confirmed", "population")) %>%
+  mutate(variable = factor(variable, levels = c("arima_Q50", "cori_Q50", "prophet_Q50",
+                                                "arima_Q90", "cori_Q90", "prophet_Q90"))) %>%
+  ggplot(aes(x = variable, y = value)) +
+  facet_wrap(~ n) +
+  geom_boxplot() +
+  labs(x = "Model and Q%-CrI", y = "Size of Q%-CrI") +
+  theme_bw()
 ```
 
 
 ## CRPS
 
 ```{r}
-df_ps <- do.call(rbind, map(files[1:2], function(f) {
+df_ps <- do.call(rbind, map(files[1:5], function(f) {
   print(sprintf("Processing file %s", f))
   read_files(f) %>%
-    get_max_N() %>%
-    get_n_ahead() %>%
-    get_dates_ahead() %>%
-    get_target_ahead() %>%
-    dplyr::select(id, new_confirmed_ahead, date_ahead, n_ahead, arima, prophet, cori, population) %>%
     rowwise() %>%
-    mutate_at(vars(arima, cori, prophet), ~ pred_score(., new_confirmed_ahead, population)) %>%
-    unnest(cols = c("n_ahead", "date_ahead", "new_confirmed_ahead", "arima", "cori", "prophet"))
+    mutate_at(vars(arima, cori, prophet), ~ pred_score(., new_confirmed, type = "crps")) %>%
+    unnest(cols = c("n", "date", "new_confirmed", "arima", "cori", "prophet"))
 }))
 ```
 
 
-### By ID and N
+### By N
 
 ```{r}
 df_ps %>%
-  dplyr::select(id, n_ahead, arima, cori, prophet) %>%
-  reshape2::melt(c("id", "n_ahead")) %>%
-  dplyr::filter(n_ahead %in% c(5, 11, 15)) %>%
-  group_by(id, n_ahead, variable) %>%
-  summarize(score = as.numeric(mean(value))) %>%
-  ungroup() %>%
-  rename(facet_var = n_ahead) %>%
-  plot_score(name = "Average conditional ranked probability score")
-```
-
-### By ID and Q
-
-```{r}
-df_ps %>%
-  dplyr::filter(n_ahead == 10) %>%
-  group_by(id) %>%
-  mutate(qgroup = ntile(new_confirmed_ahead / population, 5)) %>%
-  ungroup() %>%
-  dplyr::select(id, qgroup, arima, cori, prophet) %>%
-  reshape2::melt(c("id", "qgroup")) %>%
-  group_by(id, qgroup, variable) %>%
-  summarize(score = as.numeric(mean(value))) %>%
-  ungroup() %>% 
-  rename(facet_var = qgroup) %>%
-  plot_score(facet_name = "Quantile: ", 
-             name = "Average conditional ranked probability score for N = 10")
-```
-
-
-### By time
-
-```{r}
-df_ps %>%
-  dplyr::filter(n_ahead == 10) %>%
-  dplyr::select(id, date_ahead, arima, prophet) %>%
-  reshape2::melt(c("id", "date_ahead")) %>%
-  rename(facet_var = id, date = date_ahead, score = value) %>%
-  mutate(score = as.numeric(score)) %>%
-  plot_score.time(smoothing = 7, facet_name = "", 
-                  name = "Average conditional ranked probability score for N = 10")
-```
-
-### By incidence
-
-```{r}
-df_ps %>%
-  dplyr::filter(n_ahead %in% c(5, 11, 15)) %>%
-  mutate(incidence = new_confirmed_ahead / population * 1e5) %>%
-  mutate(incidence = as.numeric(as.character(cut(incidence, breaks = seq(0, 200, 20), labels = seq(20, 200, 20))))) %>%
-  dplyr::select(id, incidence, n_ahead, arima, cori, prophet) %>%
-  reshape2::melt(c("id", "incidence", "n_ahead")) %>%
-  group_by(incidence, n_ahead, variable) %>%
-  summarize(mean_score = as.numeric(mean(value)),
-            sd_score = as.numeric(sd(value))) %>%
-  ungroup() %>%
-  rename(facet_var = n_ahead) %>%
-  plot_score.incidence(name = "Average CRPS")
-```
-
-
-### By N (overall)
-
-```{r}
-df_ps %>%
-  dplyr::select(id, n_ahead, arima, cori, prophet) %>%
-  reshape2::melt(c("id", "n_ahead")) %>%
-  dplyr::filter(n_ahead %in% c(5, 10, 15)) %>%
-  group_by(id, n_ahead, variable) %>%
-  summarize(score = mean(value)) %>%
-  ungroup() %>%
-  plot_score_overall()
+  mutate(group = cut(n, breaks = c(0, 5, 10, 15, 21), 
+                     labels = paste(c("short", "medium", "long", "very long"), "forecast", sep = " "))) %>%
+  dplyr::select(id, group, arima, cori, prophet) %>%
+  reshape2::melt(c("id", "group")) %>%
+  plot_score(x = "CRPS", y = "Method")
 ```
 
 
@@ -171,182 +192,42 @@ plot(w, xlab = "Days ahead", ylab = "Weight", type = "b")
 
 df_ps_weighted <- df_ps %>%
   rowwise() %>%
-  mutate_at(vars(arima, cori, prophet), ~ . * w[n_ahead]) 
+  mutate_at(vars(arima, cori, prophet), ~ . * w[n]) 
 ```
 
-### By country
+### By ID
 
 ```{r}
 df_ps_weighted %>%
-  dplyr::select(id, n_ahead, arima, cori, prophet) %>%
-  reshape2::melt(c("id", "n_ahead")) %>%
-  dplyr::filter(n_ahead %in% c(5, 11, 15)) %>%
-  group_by(id, n_ahead, variable) %>%
-  summarize(score = mean(value)) %>%
-  ungroup() %>%
-  rename(facet_var = n_ahead) %>%
-  plot_score(name = "Weighted average CRPS")
+  dplyr::select(id, arima, cori, prophet) %>%
+  reshape2::melt(c("id")) %>% 
+  rename(group = id) %>%
+  plot_score(x = "Weighted CRPS", y = "Method")
 ```
 
-### Overall
+### By incidence
 
 ```{r}
 df_ps_weighted %>%
-  dplyr::select(id, n_ahead, arima, cori, prophet) %>%
-  reshape2::melt(c("id", "n_ahead")) %>%
-  dplyr::filter(n_ahead %in% c(5, 10, 15)) %>%
-  group_by(id, n_ahead, variable) %>%
-  summarize(score = mean(value)) %>%
-  ungroup() %>%
-  plot_score_overall(ylab = "Weighted average conditional ranked probability score")
+  mutate(incidence = new_confirmed / population * 1e5) %>%
+  mutate(group = cut(incidence, breaks = c(0, 30, 50, 100, Inf), 
+                     labels = paste(c("low", "medium", "high", "very high"), "incidence", sep = " "))) %>%
+  dplyr::select(id, group, arima, cori, prophet) %>%
+  reshape2::melt(c("id", "group")) %>%
+  plot_score(x = "Weighted CRPS", y = "Method")
 ```
 
 
-## Calibration
 
-### Coverage
+## Policy metric
 
-```{r}
-df_co <- do.call(rbind, map(files[1:2], function(f) {
-  print(sprintf("Processing file %s", f))
-  read_files(f) %>%
-    get_max_N() %>%
-    get_n_ahead() %>%
-    get_dates_ahead() %>%
-    get_target_ahead() %>%
-    dplyr::select(id, new_confirmed_ahead, date_ahead, n_ahead, arima, prophet, cori, population) %>%
-    rowwise() %>%
-    mutate_at(vars(arima, cori, prophet), ~ pred_score(., new_confirmed_ahead, type = "coverage", q = 0.25)) %>%
-    unnest(cols = c("n_ahead", "date_ahead", "new_confirmed_ahead", "arima", "cori", "prophet"))
-}))
+### Week of peak incidence
 
-df_co %>%
-  dplyr::select(id, n_ahead, arima, cori, prophet) %>%
-  reshape2::melt(c("id", "n_ahead")) %>%
-  dplyr::filter(n_ahead %in% c(5, 11, 15)) %>%
-  group_by(id, n_ahead, variable) %>%
-  summarize(score = 1-as.numeric(sum(value)) / n()) %>%
-  ungroup() %>%
-  rename(facet_var = n_ahead) %>%
-  plot_score(name = "Average probability that 50%-CrI does not cover the predicted value (%)",
-             labels = function(x) x * 100)
-```
+### Peak incidence
 
-#### By incidence
-
-```{r}
-df_co %>%
-  dplyr::filter(n_ahead %in% c(5, 11, 15)) %>%
-  mutate(incidence = new_confirmed_ahead / population * 1e5) %>%
-  mutate(incidence = as.numeric(as.character(cut(incidence, breaks = seq(0, 200, 20), labels = seq(20, 200, 20))))) %>%
-  dplyr::select(id, incidence, n_ahead, arima, cori, prophet) %>%
-  reshape2::melt(c("id", "incidence", "n_ahead")) %>%
-  group_by(incidence, n_ahead, variable) %>%
-  summarize(mean_score = as.numeric(mean(value)),
-            sd_score = as.numeric(sd(value))) %>%
-  ungroup() %>%
-  rename(facet_var = n_ahead) %>%
-  plot_score.incidence(name = "Coverage for 50%-CrI (%)", labels = function(x) x * 100)
-```
-
-#### By peak
-
-```{r}
-df_co %>%
-  dplyr::filter(n_ahead == 11) %>%
-  group_by(id, n_ahead) %>%
-  arrange(date_ahead) %>%
-  mutate(peak = is_peak(new_confirmed_ahead, min_x = 30, z = population / 1e5)) %>%
-  ungroup() %>%
-  dplyr::filter(peak) %>%
-  group_by(id, n_ahead) %>%
-  mutate(peak_n = 1:n()) %>%
-  dplyr::select(id, peak_n, n_ahead, arima, cori, prophet) %>%
-  reshape2::melt(c("id", "peak_n", "n_ahead")) %>%
-  mutate(score = ifelse(as.numeric(value) == 1, "Yes", "No")) %>%
-  ggplot(aes(x = peak_n, y = id, shape = score)) +
-  geom_point(size = 4) +
-  scale_shape_manual(values = c(1, 4)) +
-  scale_x_continuous(breaks = 1:5) +
-  facet_wrap(~ variable) +
-  labs(shape = "Coverage", x = "Peak number", title = "Epidemic peak covered by 11-day ahead forecast") +
-  theme(axis.title.y = element_blank())
-```
-
-### Bias
-
-```{r}
-df_cb <- do.call(rbind, map(files[1:2], function(f) {
-  print(sprintf("Processing file %s", f))
-  read_files(f) %>%
-    get_max_N() %>%
-    get_n_ahead() %>%
-    get_dates_ahead() %>%
-    get_target_ahead() %>%
-    dplyr::select(id, new_confirmed_ahead, date_ahead, n_ahead, arima, prophet, cori, population) %>%
-    rowwise() %>%
-    mutate_at(vars(arima, cori, prophet), ~ pred_score(., new_confirmed_ahead, type = "bias")) %>%
-    unnest(cols = c("n_ahead", "date_ahead", "new_confirmed_ahead", "arima", "cori", "prophet"))
-}))
-
-df_cb %>%
-  dplyr::select(id, n_ahead, arima, cori, prophet) %>%
-  reshape2::melt(c("id", "n_ahead")) %>%
-  dplyr::filter(n_ahead %in% c(5, 11, 15)) %>%
-  group_by(id, n_ahead, variable) %>%
-  summarize(score = as.numeric(mean(value))) %>%
-  ungroup() %>%
-  rename(facet_var = n_ahead) %>%
-  plot_score(name = "Average probability to predict higher than observed value (%)",
-             limits = c(0, 1), breaks = seq(0, 1, .25),
-             labels = c("0.00 \n Under-predict", "0.25", "0.50 \n Well-calibrated", "0.75", "1.00 \n Over-predict"))
-```
+### Week of onset
 
 
-#### By incidence
-
-```{r}
-df_cb %>%
-  dplyr::filter(n_ahead %in% c(5, 11, 15)) %>%
-  mutate(incidence = new_confirmed_ahead / population * 1e5) %>%
-  mutate(incidence = as.numeric(as.character(cut(incidence, breaks = seq(0, 200, 20), labels = seq(20, 200, 20))))) %>%
-  dplyr::select(id, incidence, n_ahead, arima, cori, prophet) %>%
-  reshape2::melt(c("id", "incidence", "n_ahead")) %>%
-  group_by(incidence, n_ahead, variable) %>%
-  summarize(mean_score = as.numeric(mean(1-value)),
-            sd_score = as.numeric(sd(1-value))) %>%
-  ungroup() %>%
-  rename(facet_var = n_ahead) %>%
-  plot_score.incidence(name = "Prob. to predict above incidence (%)", labels = function(x) x * 100)
-```
-
-
-## Sharpness
-
-```{r}
-df_sp <- do.call(rbind, map(files[1:2], function(f) {
-  print(sprintf("Processing file %s", f))
-  read_files(f) %>%
-    get_max_N() %>%
-    get_n_ahead() %>%
-    get_dates_ahead() %>%
-    get_target_ahead() %>%
-    dplyr::select(id, new_confirmed_ahead, date_ahead, n_ahead, arima, prophet, cori, population) %>%
-    rowwise() %>%
-    mutate_at(vars(arima, cori, prophet), ~ pred_score(., new_confirmed_ahead, population / 1e5, 
-                                                     type = "sharpness", q = 0.25)) %>%
-    unnest(cols = c("n_ahead", "date_ahead", "new_confirmed_ahead", "arima", "cori", "prophet"))
-}))
-
-df_sp %>%
-  dplyr::select(id, n_ahead, arima, cori, prophet) %>%
-  reshape2::melt(c("id", "n_ahead")) %>%
-  dplyr::filter(n_ahead %in% c(5, 10, 15)) %>%
-  group_by(id, n_ahead, variable) %>%
-  summarize(score = as.numeric(mean(value))) %>%
-  ungroup() %>%
-  plot_score_overall("Average length of 50% CrI")
-```
 
 
 

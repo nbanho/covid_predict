@@ -8,59 +8,43 @@ read_files <- function(f) { do.call(rbind, map(f, readRDS)) }
 # determine maximum days ahead forecast
 get_max_N <- function(D) { D %>% rowwise() %>% mutate(max_N = ifelse(is.null(dim(arima)), 1, nrow(arima))) }
 
-# get number of days predicted ahead as list
-get_n_ahead <- function(D) { D %>% rowwise() %>% mutate(n_ahead = list(1:max_N)) }
-
-# get dates corresponding to days ahead 
-get_dates_ahead <- function(D) { D %>% rowwise() %>% mutate(date_ahead = list(date %m+% days(0:(max_N-1)))) }
-
-# get target ahead
-get_target_ahead <- function(D, target = "new_confirmed") { 
-  D[[paste0(target, "_ahead")]] <- map2(D$id, D$date_ahead, function(i,d) {
-    D %>% dplyr::filter(id == i) %>% dplyr::filter(date %in% d) %>%
-      dplyr::select(target) %>% unlist
-  })
-  return(D)
-}
-
 pred_score <- function(
   X, # predicted target
-  y, # observed target
+  y = NULL, # observed target
   z = NULL, # values to normalize target (e.g. cumulative cases or pop)
   type = "crps", # type of score (default: continuous ranked probability score)
   ... # additional arguments to compute type of score
 ) {
   
   if (!is.null(z)) {
-    y <- y / z
     X <- X / z
+    if (!is.null(y)) {
+      y <- y / z
+    }
   }
   
-  if (is.null(dim(X))) { X <- t(as.matrix(X)) } # temporary fix
+  X <- data.frame(t(X))
   
-  Xy <- cbind(X, y)
   
-  if (type == "crps") {
-    score <- apply(Xy, 1, function(v) scoringRules::crps_sample(v[length(v)], v[-length(v)]))
-  } 
-  else if (type == "bias") {
-    score <- apply(Xy, 1, function(v) sum(v[length(v)] <= v[-length(v)]) / (length(v)-1))
-  } 
-  else if (type == "coverage") {
-    score <- apply(Xy, 1, function(v) {
-      y <- v[length(v)]
-      x <- v[-length(v)]
-      qs <- quantile(x)
-      return( (y >= qs[2]) & (y <= qs[4]) )
-    })
+  if (type == "calibration") {
+    scoring_fct <- function(y, x) { ecdf(x)(y) }
   }
   else if (type == "sharpness") {
-    args <- as.list(match.call())
-    q = args$q 
-    score <- apply(X, 1, function(x) quantile(x, 1-q) - quantile(x, q))
+    scoring_fct <- function(y = NULL, x, q) { quantile(x, 1-q) - quantile(x, q) }
   } 
+  else if (type == "crps") {
+    scoring_fct <- function(y, x) { scoringRules::crps_sample(y = y, dat = x) }
+  } 
+  else if (type == "logscore") {
+    scoring_fct <- function(y, x) { scoringRules::logs_sample(y = y, dat = x)}
+  }
+  else if (type == "bias") {
+    scoring_fct <- function(y, x) { sum(x > y) / length(x) }
+  }
   
-  return(list(score))
+  score <- mapply(scoring_fct, y, X, ...)
+  
+  return( list(score) )
   
 }
 
@@ -73,7 +57,7 @@ plot_predict <- function(
   
   if (!is.null(smoothing)) {
     group_vars <- "variable"
-    if (!interval) { group_vars = c(group_vars, "n_ahead") }
+    if (!interval) { group_vars = c(group_vars, "n") }
     dat <- dat %>%
       group_by_at(c(group_vars, "date")) %>%
       mutate(draw = 1:n()) %>%
@@ -85,9 +69,9 @@ plot_predict <- function(
   }
   
   
-  dat_pred <- dplyr::filter(dat, variable != "observed")
+  dat_pred <- dplyr::filter(dat, variable != "new_confirmed")
   dat_obse <- dat %>%
-    dplyr::filter(variable == "observed") %>%
+    dplyr::filter(variable == "new_confirmed") %>%
     dplyr::select(date, value) %>%
     group_by(date) %>%
     slice(1) %>%
@@ -109,7 +93,7 @@ plot_predict <- function(
     
     # plot point estimate
     pl <- ggplot(mapping = aes(x = date, y = value)) +
-      geom_line(data = dat_pred, mapping = aes(color = n_ahead, group = n_ahead)) +
+      geom_line(data = dat_pred, mapping = aes(color = n, group = n)) +
       geom_line(data = dat_obse, color = "black") +
       facet_wrap(~ variable, scales = "free_y") +
       scale_color_viridis_c() +
@@ -125,91 +109,19 @@ plot_predict <- function(
 
 
 plot_score <- function(
-  dat, # the data frame with columns id, variable, facet_var, and score
-  facet_name = "#days ahead: ",
-  ... # additional arguments to scale_fill_distiller
-  
+  dat, # the data frame with columns value, variable, and group
+  CrI = c(.5, .8, .95),
+  ... # lab names
 ) {
   
-  pl <- ggplot(dat, aes(x = id, y = variable, fill = score)) +
-    geom_tile() +
-    facet_wrap(~ facet_var, labeller = labeller(facet_var = label_facet(dat$facet_var, facet_name))) +
-    labs(y = "variable", x = "Country") +
-    scale_fill_distiller(palette = "Spectral", ...) +
-    theme_bw() +
-    theme(legend.position = "top", plot.margin = unit(c(0.25,1,0.25,0.25),"cm"))
-  
-  panel_width = unit(1,"npc") - sum(ggplotGrob(pl)[["widths"]][-3]) - unit(1,"line")
-  pl <- pl + guides(fill = guide_colorbar(barwidth = panel_width, title.position = "top", title.hjust = 0.5))
-  
-  return(pl)
-  
-}
-
-
-plot_score.time <- function(
-  dat, # the data frame with columns date, variable, facet_var, and score
-  smoothing = NULL, # should date be smoothed? (default = NULL, i.e. no)
-  facet_name = "#days ahead: ",
-  ... # additional arguments to scale_y_continuous
-) {
-  
-  if (!is.null(smoothing)) {
-    dat <- dat %>%
-      group_by(variable, facet_var) %>%
-      mutate(score = zoo::rollmean(score, k = smoothing, align = "center", fill = NA)) %>%
-      ungroup() %>%
-      na.omit()
-  }
-  
-  pl <- ggplot(dat, aes(x = date, y = score, color = variable)) +
-    geom_line() +
-    facet_wrap(~ facet_var, labeller = labeller(facet_var = label_facet(dat$facet_var, facet_name))) +
-    labs(x = "Date", color = "variable") +
-    scale_y_continuous(...) +
-    scale_color_brewer(palette = "Dark2") +
-    theme_bw() +
-    theme(legend.position = "top")
-  
-  return(pl)
-  
-}
-
-
-plot_score_overall <- function(
-  dat, # the data frame with columns id, variable, n_ahead, and score
-  ylab = "Average conditional ranked probability score" # 
-) {
-  
-  pl <- ggplot(dat, aes(x = variable, y = score)) +
-    geom_boxplot(stat = "boxplot", position = "dodge") +
-    geom_jitter(alpha = .5, shape = 3) +
-    facet_wrap(~ n_ahead, labeller = labeller(n_ahead = label_facet(dat$n_ahead))) +
-    labs(y = ylab, x = "variable") +
-    theme_bw() +
-    theme(legend.position = "top", legend.title = element_blank())
-  
-  return(pl)
-  
-}
-
-
-plot_score.incidence <- function(
-  dat, # the data frame with columns variable, facet_var, incidence, mean_score, sd_score
-  facet_name = "#days ahead: ", # prefix for facet_var
-  ... # additional arguments to scale_y_continuous
-) {
-  
-  pl <- ggplot(dat, aes(x = incidence, color = variable)) +
-    geom_errorbar(aes(ymin = mean_score - sd_score, ymax = mean_score + sd_score), width = 5) +
-    geom_line(aes(y = mean_score)) + 
-    geom_point(aes(y = mean_score)) +
-    facet_wrap(~ facet_var, labeller = labeller(facet_var = label_facet(dat$facet_var, facet_name))) +
-    labs(x = "Incidence") +
-    scale_y_continuous(...) +
-    scale_color_brewer(palette = "Dark2") +
-    theme_bw() +
-    theme(legend.position = "top", legend.title = element_blank())
+  pl <- dat %>%
+    ggplot(aes(y = variable, x = value)) +
+    stat_interval(.width = CrI) +
+    stat_pointinterval(.width = CrI, position = position_nudge(y = -0.2)) +
+    facet_wrap(~ group) +
+    scale_color_brewer() +
+    labs(x = "Weighted CRPS", y = "Method", color = "CrI", fill = "CrI") +
+    theme_bw() 
   
   return(pl)
   
