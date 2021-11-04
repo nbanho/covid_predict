@@ -11,17 +11,9 @@ get_max_N <- function(D) { D %>% rowwise() %>% mutate(max_N = ifelse(is.null(dim
 pred_score <- function(
   X, # predicted target
   y = NULL, # observed target
-  z = NULL, # values to normalize target (e.g. cumulative cases or pop)
   type = "crps", # type of score (default: continuous ranked probability score)
   ... # additional arguments to compute type of score
 ) {
-  
-  if (!is.null(z)) {
-    X <- X / z
-    if (!is.null(y)) {
-      y <- y / z
-    }
-  }
   
   X <- data.frame(t(X))
   
@@ -84,9 +76,9 @@ plot_predict <- function(
       stat_lineribbon(data = dat_pred, .width = c(.99, .95, .8, .5), color = "#08519C") +
       geom_line(data = dat_obse, size = 1) +
       scale_fill_brewer() +
-      facet_wrap(~ variable, scales = "free_y") +
+      facet_wrap(~ variable, ncol = 1) +
       labs(y = "Number of new cases", color = "N") +
-      theme_bw() +
+      theme_bw2() +
       theme(axis.title.x = element_blank())
     
   } else {
@@ -95,10 +87,10 @@ plot_predict <- function(
     pl <- ggplot(mapping = aes(x = date, y = value)) +
       geom_line(data = dat_pred, mapping = aes(color = n, group = n)) +
       geom_line(data = dat_obse, color = "black") +
-      facet_wrap(~ variable, scales = "free_y") +
+      facet_wrap(~ variable, ncol = 1) +
       scale_color_viridis_c() +
       labs(y = "Number of new cases", color = "N") +
-      theme_bw() +
+      theme_bw2() +
       theme(axis.title.x = element_blank())
     
   }
@@ -121,7 +113,7 @@ plot_score <- function(
     facet_wrap(~ group) +
     scale_color_brewer() +
     labs(x = "Weighted CRPS", y = "Method", color = "CrI", fill = "CrI") +
-    theme_bw() 
+    theme_bw2() 
   
   return(pl)
   
@@ -131,7 +123,7 @@ plot_score <- function(
 is_peak <- function(
   x, # target
   t = 28, # number of days to the left and right to determine peak
-  min_x, # minimum target value
+  min_x = 30, # minimum target value
   z = NULL, # normalizer 
   na_value = F # value for resulting Nas
 ) {
@@ -155,5 +147,43 @@ is_peak <- function(
   } 
   
   return(isp)
+  
+}
+
+
+is_onset <- function(
+  x, # target
+  onset_x = 10, # target onset incidence
+  ... # additional arguments to is_peak
+) {
+  
+  # get peaks
+  peaks <- is_peak(x)
+  
+  # determine onset
+  x_seg <- split(x, cumsum(peaks))
+  x_seg_idx <- split(1:length(x), cumsum(peaks))
+  onsets <- integer(length(x_seg)-1)
+  # for each peak find the first time x is below onset_x
+  for (i in 1:(length(x_seg)-1)) {
+    x_seg_i <- rev(x_seg[[i]])
+    x_seg_idx_i <- rev(x_seg_idx[[i]]) 
+    n <- length(x_seg_i)
+    k <- 1
+    while(ifelse(is.na(x_seg_i[k]), F, x_seg_i[k]  > onset_x)) {
+      k <- k + 1
+    }
+    if (k <= n) {
+      onsets[i] <- x_seg_idx_i[k]
+    } else {
+      # if x always > onset_x take the middle between minimum and maximum x
+      onsets[i] <- floor( ( x_seg_idx_i[which.min(x_seg_i)] + which(peaks)[i] ) / 2 )
+    }
+  }
+  
+  iso <- rep(F, length(x))
+  iso[onsets] <- T
+  
+  return(iso)
   
 }
