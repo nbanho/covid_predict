@@ -64,7 +64,7 @@ predict.cori <- function(
   sis <- lapply(seq_len(nrow(estimate_R_obj$si_distr)), function(i) estimate_R_obj$si_distr[i, ])
   
   # simulate projections
-  ns <- floor(d / nrow(estimate_R_obj$si_distr))
+  ns <- ceiling(d / nrow(estimate_R_obj$si_distr))
   proj <- map(sis, function(S) as.matrix(project(x = inc, R = plausible_r, si = S[-1], n_sim = ns, n_days = n)))
   proj <- do.call(cbind, proj)
   

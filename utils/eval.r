@@ -15,8 +15,8 @@ pred_score <- function(
   ... # additional arguments to compute type of score
 ) {
   
+  if(is.null(y)) {y <- rep(NA, nrow(X))}
   X <- data.frame(t(X))
-  
   
   if (type == "calibration") {
     scoring_fct <- function(y, x) { ecdf(x)(y) }
@@ -32,6 +32,9 @@ pred_score <- function(
   }
   else if (type == "bias") {
     scoring_fct <- function(y, x) { sum(x > y) / length(x) }
+  } 
+  else if (type == "critical") {
+    scoring_fct <- function(y = NULL, x, q) { sum(x > q) / length(x) }
   }
   
   score <- mapply(scoring_fct, y, X, ...)
@@ -61,9 +64,9 @@ plot_predict <- function(
   }
   
   
-  dat_pred <- dplyr::filter(dat, variable != "new_confirmed")
+  dat_pred <- dplyr::filter(dat, variable != "target")
   dat_obse <- dat %>%
-    dplyr::filter(variable == "new_confirmed") %>%
+    dplyr::filter(variable == "target") %>%
     dplyr::select(date, value) %>%
     group_by(date) %>%
     slice(1) %>%
@@ -73,11 +76,10 @@ plot_predict <- function(
     
     # plot interval
     pl <- ggplot(mapping = aes(x = date, y = value)) +
-      stat_lineribbon(data = dat_pred, .width = c(.99, .95, .8, .5), color = "#08519C") +
+      stat_lineribbon(data = dat_pred, .width = c(.95, .8, .5), color = "#08519C") +
       geom_line(data = dat_obse, size = 1) +
       scale_fill_brewer() +
-      facet_wrap(~ variable, ncol = 1) +
-      labs(y = "Number of new cases", color = "N") +
+      facet_wrap(~ variable, ncol = 2) +
       theme_bw2() +
       theme(axis.title.x = element_blank())
     
@@ -85,11 +87,10 @@ plot_predict <- function(
     
     # plot point estimate
     pl <- ggplot(mapping = aes(x = date, y = value)) +
-      geom_line(data = dat_pred, mapping = aes(color = n, group = n)) +
+      geom_line(data = dat_pred, mapping = aes(color = n)) +
       geom_line(data = dat_obse, color = "black") +
-      facet_wrap(~ variable, ncol = 1) +
-      scale_color_viridis_c() +
-      labs(y = "Number of new cases", color = "N") +
+      facet_wrap(~ variable, ncol = 2) +
+      scale_color_viridis_d() +
       theme_bw2() +
       theme(axis.title.x = element_blank())
     
@@ -102,8 +103,7 @@ plot_predict <- function(
 
 plot_score <- function(
   dat, # the data frame with columns value, variable, and group
-  CrI = c(.5, .8, .95),
-  ... # lab names
+  CrI = c(.5, .8, .95)
 ) {
   
   pl <- dat %>%
@@ -112,7 +112,7 @@ plot_score <- function(
     stat_pointinterval(.width = CrI, position = position_nudge(y = -0.2)) +
     facet_wrap(~ group) +
     scale_color_brewer() +
-    labs(x = "Weighted CRPS", y = "Method", color = "CrI", fill = "CrI") +
+    labs(color = "CrI", fill = "CrI") +
     theme_bw2() 
   
   return(pl)
@@ -122,15 +122,11 @@ plot_score <- function(
 
 is_peak <- function(
   x, # target
+  through = F, # look for through instead of peak
   t = 28, # number of days to the left and right to determine peak
   min_x = 30, # minimum target value
-  z = NULL, # normalizer 
   na_value = F # value for resulting Nas
 ) {
-  
-  if (!is.null(z)) {
-    x <- x / z
-  }
   
   n <- length(x)
   isp <- logical(n)
@@ -139,7 +135,12 @@ is_peak <- function(
   for (i in (t):(n-t)) {
     left_x <- x[(i-t):(i-1)]
     right_x <- x[(i+1):(i+t)]
-    if (all(c(left_x, right_x) < x[i]) & x[i] > min_x) {
+    if (through) {
+      extreme <- all(c(left_x, right_x) > x[i]) & x[i] > min_x
+    } else {
+      extreme <- all(c(left_x, right_x) < x[i]) & x[i] > min_x
+    }
+    if (extreme) {
       isp[i] <- T
     } else {
       isp[i] <- F
@@ -150,6 +151,50 @@ is_peak <- function(
   
 }
 
+is_critical <- function(
+  x, # target
+  critical_x = 50, # critical incidence
+  ... # additional arguments to is_peak
+) {
+  
+  # determine peaks 
+  peaks <- is_peak(x, ...)
+  
+  # determine bottoms
+  bottoms <- rep(F, length(peaks))
+  btw_peaks <- split(x, cumsum(peaks))
+  n <- 0
+  for (i in 1:length(btw_peaks)) {
+    if (i %% 2 == 0) {
+      bottoms[n + which.min(btw_peaks[[i]])] <- T
+    } else {
+      n <- n + length(btw_peaks[[i]])
+    }
+  }
+  
+  # combine peaks and bottoms to know what to know what to look for
+  extremes <- mapply(any, peaks, bottoms)
+  is_up <- ifelse(((1 + cumsum(extremes)) %% 2) == 0, F, T)
+  is_up <- sapply(split(is_up, cumsum(extremes)), all)
+  splits <- lag(cumsum(extremes)) # lag to move extremes to previous vector
+  splits[is.na(splits)] <- 0
+  x_list <- split(x, splits)
+  
+  
+  # determine criticals
+  criticals <- lapply(x_list, function(xl) rep(NA, length(xl)))
+  for (i in 1:length(x_list)) {
+    if (is_up[[i]]) { criticals[[i]][which(x_list[[i]] >= critical_x)[1]] <- "up" }
+    else {criticals[[i]][which(x_list[[i]] < critical_x)[1]] <- "down"}
+  }
+  
+  # add x (helpful for testing)
+  criticals <- unlist(criticals)
+  names(criticals) <- x
+  
+  return(criticals)
+}
+
 
 is_onset <- function(
   x, # target
@@ -158,7 +203,7 @@ is_onset <- function(
 ) {
   
   # get peaks
-  peaks <- is_peak(x)
+  peaks <- is_peak(x, ...)
   
   # determine onset
   x_seg <- split(x, cumsum(peaks))
