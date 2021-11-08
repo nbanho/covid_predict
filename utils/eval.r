@@ -123,7 +123,7 @@ plot_score <- function(
 is_peak <- function(
   x, # target
   through = F, # look for through instead of peak
-  t = 28, # number of days to the left and right to determine peak
+  t = 21, # number of days to the left and right to determine peak
   min_x = 30, # minimum target value
   na_value = F # value for resulting Nas
 ) {
@@ -150,6 +150,84 @@ is_peak <- function(
   return(isp)
   
 }
+
+# closest_peak <- function(
+#   x, # target
+#   p, # peaks of target
+#   ... # additional arguments to is_peak(x, ...)
+# ) {
+#   
+#   # n
+#   n <- length(x)
+#   n_p <- sum(p)
+#   p_i <- which(p)
+#   
+#   # peaks of x
+#   p_x <- is_peak(x, ...)
+#   p_x_i <- which(p_x)
+#   
+#   # determine peak no of closest peak of x to peak of target p
+#   p_x_no <- rep(NA, n)
+#   
+#   for (i in 1:n_p) {
+#     d_i <- dist(c(p_i[i], p_x_i)) %>% as.matrix() %>% .[1,2:ncol(.)]
+#     idx_min_d_i <- which.min(d_i)
+#     idx_p_x_no <- p_x_i[idx_min_d_i]
+#     p_x_no[idx_p_x_no] <- i 
+#   }
+#   
+#   return(p_x_no)
+# }
+
+
+
+is_closest_peak <- function(
+  x, # forecast
+  p, # peaks of target
+  t_right = 28, # maximum time to look for peak to the right
+  t_left = 14 # maximum time to look for peak to the right
+) {
+  
+  # n
+  n <- length(x)
+  n_p <- sum(p)
+  
+  # next peaks
+  next_p <- rep(F, n)
+  
+  # split by peaks
+  btw_peaks <- split(x, cumsum(p))
+  btw_peaks_idx <- split(1:n, cumsum(p))
+  
+  # determine closest peak
+  for (k in 1:n_p) {
+    peak_left_x <- max(btw_peaks[[k]])
+    peak_left_idx <- which.max(btw_peaks[[k]])
+    peak_right_x <- max(btw_peaks[[k+1]])
+    peak_right_idx <- which.max(btw_peaks[[k+1]])
+    
+    is_left_close <- ((length(btw_peaks[[k]]) - peak_left_idx) < t_left)
+    is_right_close <- (peak_right_idx < t_right)
+    is_right_larger <- (peak_left_x <= peak_right_x)
+    
+    if (is_left_close & is_right_close) {
+      if (is_right_larger) {
+        next_p[btw_peaks_idx[[k+1]][peak_right_idx]] <- T
+      } else {
+        next_p[btw_peaks_idx[[k]][peak_left_idx]] <- T
+      }
+    } else if (is_left_close) {
+      next_p[btw_peaks_idx[[k]][peak_left_idx]] <- T
+    } else if (is_right_close) {
+      next_p[btw_peaks_idx[[k+1]][peak_right_idx]] <- T
+    }
+    # else, no close peak found
+    
+  }
+  
+  return(next_p)
+}
+
 
 is_critical <- function(
   x, # target

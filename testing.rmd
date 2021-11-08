@@ -44,7 +44,7 @@ df <- read_csv("data/prep_jhu_all_countries.csv") %>%
                             "SVN", "ESP", "SWE", "GBR"))
 
 # country to test loop
-countries <- c("GBR")
+countries <- c("DEU")
 
 # subset to test how to
 BEL <- df %>%
@@ -217,7 +217,8 @@ for (j in 1:length(countries)) {
   
   # data
   ctry <- countries[j]
-  df_ctry <- subset(df, id == ctry)
+  df_ctry <- subset(df, id == ctry) %>%
+    dplyr::filter(date >= "2020-02-01")
   
   # test data
   test_df_ctry <- slice(df_ctry, (n_train+1):nrow(df_ctry))
@@ -226,10 +227,19 @@ for (j in 1:length(countries)) {
   pred_mat <- matrix(NA, ncol = n_preds, nrow = nrow(test_df_ctry))
   for (k in 1:nrow(test_df_ctry)) {
     #train_df_ctry <- slice(df_ctry, 1:(n_train+k-1))
-    train_df_ctry <- slice(df_ctry, tail(1:(n_train+k-1), 120))
-    trained_model <- train.arima(train_df_ctry$new_confirmed)
-    preds <- predict.arima(trained_model)
+    train_df_ctry <- slice(df_ctry, tail(1:(n_train+k-1), 90))
+    trained_model <- train.arima(train_df_ctry$new_confirmed, iter = 500)
+    trained_model2 <- train.arima(log(train_df_ctry$new_confirmed/train_df_ctry$population*1e5), iter = 500)
+    preds <- predict.arima(trained_model, d = 1000)
+    preds2 <- predict.arima(trained_model2, d = 1000)
     mean_preds <- rowMeans(preds)
+    q95 <- apply(preds, 1, quantile, probs = .99)
+    q95_2 <- apply(preds2, 1, function(x) quantile(exp(x) * train_df_ctry$population[1] / 1e5, probs = .99))
+    if(any(q95 > 1e5)) {
+      bad_model = trained_model
+      stop("High pred")
+      break
+    }
     pred_mat[k, ] <- mean_preds
   }
   

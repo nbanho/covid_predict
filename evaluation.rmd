@@ -12,7 +12,10 @@ knitr::opts_chunk$set(echo = TRUE)
 ```{r}
 # libraries
 library(tidyverse)
+library(reshape2)
 library(lubridate)
+library(grid)
+library(gridExtra)
 
 # utils
 source("utils/eval.r")
@@ -20,6 +23,11 @@ source("utils/delays.r")
 
 # helper
 source("helper/plotting.r")
+
+# global parameters
+n_brks <- c(0, 7, 14, 21)
+n_lbs <- paste(c("1", "2", "3"), "-week(s) ahead forecast", sep = " ")
+inc_small_brks <- c(-Inf, 10, 20, 30, 40, 50, 60, 80, 100, 125, 150, Inf)
 ```
 
 ## Data
@@ -32,7 +40,7 @@ files <- list.files("predictions", pattern = ".rds", full.names = T)
 ## Plot predict
 
 ```{r}
-pdf(file = "results/ts_forecast.pdf", w = 12 / cm(1), h = 24 / cm(1))
+pdf(file = "results/ts_forecast.pdf", w = 21 / cm(1), h = 14 / cm(1))
 for (f in files) {
   ctry <- gsub(".rds", "", basename(f))
   n_ahead <- 10
@@ -44,46 +52,14 @@ for (f in files) {
       mutate_at(vars(arima, cori, prophet), ~ list(.[n_ahead, ])) %>% 
       mutate_at(vars(date, new_confirmed), ~ list(.[n_ahead])) %>% 
       unnest(cols = c("date", "new_confirmed", "arima", "cori", "prophet")) %>%
-      dplyr::select(date, new_confirmed, arima, cori, prophet) %>%
-      reshape2::melt(c("date")) %>%
-      plot_predict(interval = T, smoothing = 7) +
-      labs(title = ctry, 
-           subtitle = paste0("Probabilistic ", n_ahead, "-day ahead forecast (blue) for daily new cases (black)"),
-           caption = "Note: data has been smoothed by a rolling 7-day average.") 
-  )
-  
-  print(
-    read_files(f) %>%
-      rowwise() %>%
-      mutate_at(vars(arima, cori, prophet), ~ list(apply(., 1, mean))) %>%
-      unnest(cols = c("date", "new_confirmed", "n", "arima", "cori", "prophet")) %>%
-      dplyr::select(id, date, new_confirmed, n, arima, cori, prophet) %>%
-      reshape2::melt(c("id", "date", "n")) %>%
-      plot_predict(interval = F, smoothing = 7) +
-      labs(title = ctry, 
-           subtitle = "Mean N-day ahead forecast (color) for daily new cases (black)",
-           caption = "Note: data has been smoothed by a rolling 7-day average.")
-  )
-}
-dev.off()
-
-
-pdf(file = "results/ts_forecast_not_smoothed.pdf", w = 12 / cm(1), h = 24 / cm(1))
-for (f in files) {
-  ctry <- gsub(".rds", "", basename(f))
-  n_ahead <- 10
-  print(
-    read_files(f) %>%
-      get_max_N() %>%
-      dplyr::filter(max_N >= n_ahead) %>%
-      rowwise() %>%
-      mutate_at(vars(arima, cori, prophet), ~ list(.[n_ahead, ])) %>% 
-      mutate_at(vars(date, new_confirmed), ~ list(.[n_ahead])) %>% 
-      unnest(cols = c("date", "new_confirmed", "arima", "cori", "prophet")) %>%
-      dplyr::select(date, new_confirmed, arima, cori, prophet) %>%
+      mutate(target = new_confirmed / population * 1e5) %>%
+      mutate_at(vars(arima, cori, prophet), ~ . / population * 1e5) %>%
+      dplyr::select(date, target, arima, cori, prophet) %>%
       reshape2::melt(c("date")) %>%
       plot_predict(interval = T) +
-      labs(title = ctry, 
+      labs(y = "Incidence (per 100,000 population)", 
+           color = "CrI", fill = "CrI",
+           title = ctry, 
            subtitle = paste0("Probabilistic ", n_ahead, "-day ahead forecast (blue) for daily new cases (black)")) 
   )
   
@@ -92,11 +68,17 @@ for (f in files) {
       rowwise() %>%
       mutate_at(vars(arima, cori, prophet), ~ list(apply(., 1, mean))) %>%
       unnest(cols = c("date", "new_confirmed", "n", "arima", "cori", "prophet")) %>%
-      dplyr::select(id, date, new_confirmed, n, arima, cori, prophet) %>%
+      dplyr::filter(n %in% c(1, 7, 14, 21)) %>%
+      mutate(n = factor(as.character(n), levels = c("1", "7", "14", "21"))) %>%
+      mutate(target = new_confirmed / population * 1e5) %>%
+      mutate_at(vars(arima, cori, prophet), ~ . / population * 1e5) %>%
+      dplyr::select(id, date, target, n, arima, cori, prophet) %>%
       reshape2::melt(c("id", "date", "n")) %>%
       plot_predict(interval = F) +
-      labs(title = ctry, 
-           subtitle = "Mean N-day ahead forecast (color) for daily new cases (black)")
+      labs(y = "Incidence (per 100,000 population)",
+           color = "Number of days forecasted ahead",
+           title = ctry, 
+           subtitle = "Posterior mean N-days ahead forecast (color) for daily new cases (black)")
   )
 }
 dev.off()
@@ -118,17 +100,17 @@ df_pCalib <- do.call(rbind, map(files, function(f) {
 }))
 
 pCalib_pl <- df_pCalib %>%
-  dplyr::filter(n %in% c(1, 7, 14, 21)) %>%
+  mutate(n = cut(n, breaks = n_brks, labels = n_lbs)) %>%
   dplyr::select(n, arima, cori, prophet) %>%
   reshape2::melt("n") %>%
   ggplot(aes(x = value)) +
-  facet_wrap(~ variable + n, ncol = 4) +
+  facet_wrap(~ variable + n, ncol = 3) +
   geom_histogram(aes(y = stat(count) / sum(count))) +
   scale_y_continuous(labels = function(x) x * 100) +
   labs(x = "Probability integral transform", 
        y = "Relative frequency (%)",
        title = "Probabilistic Calibration",
-       subtitle = "PIT histogram by method and N-day ahead forecast") +
+       subtitle = "PIT histogram by method and weekly ahead forecast") +
   theme_bw2()
 
 save_plot(pCalib_pl, "results/calibration_probabilistic.pdf", w = 21, h = 21)
@@ -138,8 +120,6 @@ save_plot(pCalib_pl, "results/calibration_probabilistic.pdf", w = 21, h = 21)
 ### Marginal
 
 ```{r}
-brks <- c(seq(0, 100, 10), seq(125, 200, 25))
-          
 Gx <- df_pCalib %>%
   group_by(id, date) %>% 
   summarize(incidence = new_confirmed[1] / population * 1e5) %>%
@@ -151,21 +131,21 @@ Gx <- df_pCalib %>%
 df_mCalib <- df_pCalib %>%
   left_join(Gx) %>%
   mutate_at(vars(arima, cori, prophet), ~ . - Gx) %>%
-  mutate(incidence = as.numeric(as.character(cut(incidence, breaks = brks, labels = brks[-1])))) %>%
+  mutate(incidence = as.numeric(as.character(cut(incidence, breaks = inc_small_brks, labels = inc_small_brks[-1])))) %>%
   dplyr::select(n, incidence, arima, cori, prophet) %>%
+  mutate(n = cut(n, breaks = n_brks, labels = n_lbs)) %>%
   reshape2::melt(c("n", "incidence")) %>%
   group_by(n, incidence, variable) %>%
   summarize(value = mean(value)) %>%
   ungroup() 
 
 mCalib_pl <- df_mCalib %>%
-  dplyr::filter(n %in% c(1, 7, 14, 21)) %>%
   ggplot(aes(x = incidence, y = value, color = variable)) +
   geom_line() +
-  facet_wrap(~ n) +
+  facet_wrap(~ n, ncol = 3) +
   geom_hline(aes(yintercept = 0), linetype = "dotted") +
   scale_color_brewer(palette = "Dark2") +
-  scale_x_continuous(breaks = brks) +
+  scale_x_continuous(breaks = inc_small_brks) +
   labs(x = "Threshold of incidence (new cases per 100,000 people)", 
        y = "Average predictive CDF - Average empirical CDF",
        title = "Probabilistic Calibration",
@@ -175,7 +155,7 @@ mCalib_pl <- df_mCalib %>%
         legend.title = element_blank(),
         legend.justification = "left") 
 
-save_plot(mCalib_pl, "results/calibration_marginal.pdf", w = 21, h = 21)
+save_plot(mCalib_pl, "results/calibration_marginal.pdf", w = 21, h = 10)
 ```
 
 
@@ -194,14 +174,13 @@ df_sharp <- do.call(rbind, map(files, function(f) {
 }))
 
 sharp_pl <- df_sharp %>%
-  dplyr::filter(n %in% c(1, 7, 14, 21)) %>%
+  mutate(n = cut(n, breaks = n_brks, labels = n_lbs)) %>%
   dplyr::select(-population, -new_confirmed) %>%
   reshape2::melt(c("id", "n", "date")) %>%
   mutate(cri = factor(stringi::stri_extract(variable, regex = "Q\\d{2}"), levels = c("Q50", "Q90"))) %>%
   mutate(variable = factor(gsub("_Q\\d{2}", "", variable), levels = c("arima", "cori", "prophet"))) %>%
-  dplyr::filter(variable != "cori") %>%
   ggplot(aes(x = cri, y = value)) +
-  facet_wrap(~ variable + n, ncol = 4) +
+  facet_wrap(~ variable + n, ncol = length(n_brks)-1) +
   geom_boxplot() +
   labs(x = "Q%-Credible interval", 
        y = "Size of interval (incidence)",
@@ -296,65 +275,163 @@ save_plot(weighted_crps_inc_pl, "results/crps_weighted_by_incidence.pdf", w = 21
 
 ## Policy metric
 
-### Peak incidence
+### TPP and FPP
 
 ```{r}
-
-```
-
-### Day of peak incidence
-
-```{r}
-df_peak_inc <- do.call(rbind, map(files[1:2], function(f) {
+df_crit <- do.call(rbind, map(files[1], function(f) {
   print(sprintf("Processing file %s", f))
   read_files(f) %>%
-    dplyr::select(id, population, new_confirmed, date, n, arima, prophet, cori) %>%
+    dplyr::select(id, new_confirmed, date, n, arima, prophet, cori, population) %>%
     rowwise() %>%
-    mutate_at(vars(arima, cori, prophet), ~ pred_score(. / population * 1e5, )))) %>%
-    unnest(cols = c("n", "date", "new_confirmed", "arima", "cori", "prophet"))
+    mutate_at(vars(arima, cori, prophet), list(Q25 = ~ pred_score(. / population * 1e5, type = "critical", q = 25))) %>%
+    mutate_at(vars(arima, cori, prophet), list(Q50 = ~ pred_score(./ population * 1e5, type = "critical", q = 50))) %>%
+    mutate_at(vars(arima, cori, prophet), list(Q75 = ~ pred_score(. / population * 1e5, type = "critical", q = 75))) %>%
+    mutate_at(vars(arima, cori, prophet), list(Q100 = ~ pred_score(. / population * 1e5, type = "critical", q = 100))) %>%
+    dplyr::select(-arima, -cori, -prophet) %>%
+    unnest(cols = c("n", "date", "new_confirmed", 
+                    "arima_Q25", "cori_Q25", "prophet_Q25", "arima_Q50", "cori_Q50", "prophet_Q50",
+                    "arima_Q75", "cori_Q75", "prophet_Q75", "arima_Q100", "cori_Q100", "prophet_Q100"))
 }))
 
-df_peak_inc_obse <- df_peak_inc %>%
-  dplyr::select(id, date, new_confirmed) %>%
-  group_by(id, date) %>%
-  summarize(new_confirmed = new_confirmed[1]) %>%
-  ungroup() %>%
-  group_by(id) %>%
-  mutate(peak = is_peak(new_confirmed)) %>%
-  ungroup() %>%
-  dplyr::filter(peak) %>%
-  dplyr::select(-peak)
+df_crit_weight <- df_crit %>%
+  reshape2::melt(c("n", "id", "date", "new_confirmed", "population")) %>%
+  mutate(threshold = as.numeric(stringi::stri_extract(variable, regex = "\\d{2,3}"))) %>%
+  mutate(variable = gsub("_Q\\d{2,3}", "", variable)) %>%
+  mutate(value = value * w[n]) %>%
+  group_by(id, date, threshold, variable, new_confirmed, population) %>%
+  summarize(value = sum(value)) %>%
+  ungroup()
 
-df_peak_inc_pred <- df_peak_inc %>%
-  dplyr::select(id, date, n, arima, cori, prophet) %>%
-  group_by(id, n) %>%
-  mutate_at(vars(cori, arima, prophet), ~ is_peak(.)) %>%
+# subset critical values
+df_crit_weight_sub <- df_crit_weight %>%
+  group_by(id, variable, threshold) %>%
+  arrange(date) %>%
+  mutate(is_crit = is_critical(new_confirmed / population * 1e5, threshold[1], min_x = 10)) %>%
   ungroup() %>%
-  dplyr::filter(peak) 
+  dplyr::filter(!is.na(is_crit))
 
-df_peak_inc_join <- df_peak_inc_pred %>%
-  left_join(df_peak_inc_obse %>% rename(new_confirmed = date))
-  
-  reshape2::melt(id.vars = c("id", "date", "n")) %>%
-  group_by(id, n, variable) %>%
-  mutate(peak = is_peak(value)) %>%
-  ungroup() %>%
-  dplyr::filter(peak) %>%
-  distinct(.keep_all = T) %>%
-  dplyr::select(-value, -peak) %>%
-  mutate(date = as.character(date)) %>%
-  reshape2::dcast(id + n ~ variable) %>%
-  mutate_at(vars(new_confirmed, arima, cori, prophet), as.Date) %>%
-  mutate_at(vars(arima, cori, prophet), ~ as.numeric(. - new_confirmed))
-  
-  
+weighted_tpp_pl <- df_crit_weight_sub %>%
+  dplyr::filter(is_crit == "up") %>%
+  rename(group = threshold) %>%
+  plot_score() +
+  scale_x_continuous(limits = c(0, 1), expand = c(0,0), labels = function(x) x * 100) +
+  labs(x = "Weighted true positive probability (TPP)", 
+       y = "Method",
+       title = "Critical Incidence",
+       subtitle = "Weighted TPP by critical incidence") +
+  theme_bw2()
+
+weighted_tpp_pl
+
+
+weighted_fpp_pl <- df_crit_weight_sub %>%
+  dplyr::filter(is_crit == "down") %>%
+  rename(group = threshold) %>%
+  plot_score() +
+  scale_x_continuous(limits = c(0, 1), expand = c(0,0), labels = function(x) x * 100) +
+  labs(x = "Weighted false positive probability (%)", 
+       y = "Method",
+       title = "Critical incidence",
+       subtitle = "Weighted FPP by critical incidence") +
+  theme_bw2()
+
+weighted_fpp_pl
+
+df_crit_weight_f1 <- df_crit_weight_sub %>%
+  group_by(id, variable, is_crit, threshold) %>%
+  summarize(value = mean(value)) %>%
+  reshape2::dcast(id + variable + threshold ~ is_crit) %>%
+  mutate(f1 = up / (up + 0.5 * (down + (1-up))))
+
+weighted_f1_pl <- df_crit_weight_f1 %>%
+  rename(group = threshold, value = f1) %>%
+  plot_score() +
+  scale_x_continuous(limits = c(0, 1), expand = c(0,0), labels = function(x) x * 100) +
+  labs(x = "F1 (%)", 
+       y = "Method",
+       title = "Critical incidence",
+       subtitle = "Weighted F1-score by critical incidence",
+       caption = "Note: TPP and FPP are summarized by ID and then F1 is computed.") +
+  theme_bw2()
+
+weighted_f1_pl
+
+critical_pl <- arrangeGrob(weighted_tpp_pl, weighted_fpp_pl, weighted_f1_pl, ncol = 2)
+
+save_plot(critical_pl, "results/critical_incidence.pdf", w = 21, h = 18)
 ```
 
-### Day of onset
+### Peak delay
 
 ```{r}
+df_peak <- do.call(rbind, map(files, function(f) {
+  print(sprintf("Processing file %s", f))
+  df <- read_files(f) %>%
+    dplyr::select(id, population, new_confirmed, date, n, arima, prophet, cori) %>%
+    rowwise() %>%
+    mutate_at(vars(arima, cori, prophet), ~ list(apply(., 1, mean))) %>%
+    unnest(cols = c("n", "date", "new_confirmed", "arima", "cori", "prophet")) %>%
+    mutate_at(vars(new_confirmed, arima, cori, prophet), ~ . / population * 1e5) %>%
+    dplyr::select(id, date, n, new_confirmed, arima, cori, prophet) 
+  
+  df %>%
+    group_by(id, n) %>%
+    nest() %>%
+    mutate(data = map(data, ~ mutate(.x, peak = is_peak(new_confirmed, min_x = 15)))) %>%
+    mutate(data = map(data, ~ mutate_at(.x, vars(arima, cori, prophet), list(peak = ~ is_closest_peak(., peak, t_right = Inf))))) %>%
+    mutate(data_peak = map(data, function(D) {
+      pd <- data.frame(cbind.fill(
+        (D$date[D$peak]),
+        (D$date[D$arima_peak]),
+        (D$date[D$cori_peak]),
+        (D$date[D$prophet_peak]),
+        (D$new_confirmed[D$peak]),
+        (D$arima[D$arima_peak]),
+        (D$cori[D$cori_peak]),
+        (D$prophet[D$prophet_peak])
+      ), stringsAsFactors = F) %>%
+        set_names(c("obs_date", "arima_date", "cori_date", "prophet_date",
+                    "obs_inc", "arima_inc", "cori_inc", "prophet_inc")) %>%
+        mutate_at(vars(matches("date")), as.Date, origin = "1970-01-01") %>%
+        mutate_at(vars(matches("inc")), as.numeric)
+      return(pd)
+    })) %>%
+    dplyr::select(id, n, data_peak) %>%
+    unnest(cols = "data_peak") %>%
+    group_by(id, n) %>%
+    mutate(peak_no = 1:n()) %>%
+    ungroup()
+}))
 
+# nuber of peaks by country
+df_peak %>% 
+  group_by(id) %>%
+  summarize(max(peak_no)) 
+
+peak_delay <- df_peak %>%
+  group_by(id) %>%
+  dplyr::filter(obs_inc == max(obs_inc)) %>% # use maximum peak for now
+  mutate_at(vars(arima_date, cori_date, prophet_date), list(ddiff = ~ n - as.numeric(. - obs_date))) 
+  
+peak_delay_pl <- peak_delay %>%
+  mutate(n = cut(n, breaks = n_brks, labels = n_lbs)) %>%
+  dplyr::select(id, n, matches("ddiff")) %>%
+  melt(c("id", "n")) %>%
+  mutate(variable = gsub("_date_ddiff", "", variable)) %>%
+  rename(group = n) %>%
+  plot_score(CrI = c(0.5, 0.8)) +
+  geom_vline(aes(xintercept = 0), linetype = "dotted") +
+  labs(x = "Predicted days ahead - (method peak - observed peak)", 
+       y = "Method",
+       title = "Peak delay",
+       subtitle = "Peak delay by method and weekly ahead forecast",
+       caption = "Note: Data summarized by the highest peak of each country.") +
+  theme_bw2()
+
+save_plot(peak_delay_pl, "results/peak_delay.pdf", w = 21, h = 18)
 ```
+
+
 
 
 
