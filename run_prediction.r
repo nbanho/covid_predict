@@ -107,7 +107,7 @@ run_prediction <- function() {
     
     # save
     test_df_ctry <- test_df_ctry %>%
-      dplyr::select(-date, -new_confirmed) %>%
+      dplyr::select(-date, -new_confirmed, -incidence) %>%
       rename(n = n_ahead, date = date_ahead, 
              new_confirmed = new_confirmed_ahead, incidence = incidence_ahead) %>%
       dplyr::select(id, population, n, date, new_confirmed, incidence, all_of(models))
