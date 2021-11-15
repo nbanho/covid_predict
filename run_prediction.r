@@ -25,21 +25,20 @@ run_prediction <- function() {
                             "FIN", "FRA", "DEU", "GRC", "HUN", "IRL", "ITA", "LVA",
                             "LTU", "NLD", "POL", "PRT", "ROU", "SVK",
                             "SVN", "ESP", "SWE", "GBR")[id_idx[1]:id_idx[2]]) %>%
-    mutate(incidence = new_confirmed / population * 1e5)
+    mutate(inc_sqrt = trans(new_confirmed, population)) 
   countries <- unique(df$id)
   
   for (j in 1:length(countries)) {
     
     # data
     ctry <- countries[j]
-    df_ctry <- subset(df, id == ctry)
+    df_ctry <- subset(df, id == ctry) 
     
     # test data
     test_df_ctry <- df_ctry %>%
       slice((n_train+1):nrow(df_ctry)) %>%
       as_tibble() %>%
-      mutate(n_ahead = list(NA), date_ahead = list(NA), 
-             new_confirmed_ahead = list(NA), incidence_ahead = list(NA)) 
+      mutate(n_ahead = list(NA), date_ahead = list(NA), new_confirmed_ahead = list(NA)) 
     if ("arima" %in% models) { test_df_ctry$arima <- list(NA) }
     if ("cori" %in% models) { test_df_ctry$cori <- list(NA) }
     if ("prophet" %in% models) { test_df_ctry$prophet <- list(NA) }
@@ -52,7 +51,7 @@ run_prediction <- function() {
     
     # for prophet: set max cap a little bit above maximum observed incidence among all countries
     if ("prophet" %in% models) {
-      ctry_cap <- prophet.max_inc * df_ctry$population[1] / 1e5
+      ctry_cap <- sqrt(prophet.max_inc)
     }
     
     # loop over test set
@@ -61,7 +60,7 @@ run_prediction <- function() {
       # train data
       train_df_ctry <- slice(df_ctry, 1:(n_train+k-1))
       # use only last 3 months to fit model, except cori, which uses even less
-      # train_df_ctry_last <- tail(train_df_ctry, 90) 
+      train_df_ctry_last <- tail(train_df_ctry, 90) 
       
       # test data
       pred_df <- slice(test_df_ctry, k:(k-1+n_preds)) 
@@ -69,31 +68,29 @@ run_prediction <- function() {
       test_df_ctry$n_ahead[[k]] <- 1:max_n
       test_df_ctry$date_ahead[[k]] <- pred_df$date
       test_df_ctry$new_confirmed_ahead[[k]] <- pred_df$new_confirmed
-      test_df_ctry$incidence_ahead[[k]] <- pred_df$incidence
       
       # train and predict
       if ("arima" %in% models) {
-        
         trained_arima <- train(train_df_ctry$date, 
-                               trans(train_df_ctry$incidence, method = trans_y), 
+                               train_df_ctry_last$inc_sqrt, 
                                method = "arima", 
                                iter = n_sample)
         predicted_arima <- predict(trained_arima,
                                    seed = seed12345)
         predicted_arima <- matrix(predicted_arima[1:max_n,1:n_draws], ncol = n_draws)
-        predicted_arima <- inv_trans(predicted_arima, method = trans_y)
+        predicted_arima <- inv_trans(predicted_arima, train_df_ctry_last$pop[1])
         test_df_ctry$arima[[k]] <- predicted_arima
       } 
       if ("prophet" %in% models) {
         trained_prophet <- train(train_df_ctry$date, 
-                                 trans(train_df_ctry$incidence, method = trans_y), 
+                                 train_df_ctry_last$inc_sqrt, 
                                  method = "prophet", 
                                  cap = ctry_cap, 
                                  mcmc.samples = n_sample, cores = n_chains,
                                  seed = seed12345)
         predicted_prophet <- predict(trained_prophet)
         predicted_prophet <- matrix(predicted_prophet[1:max_n,1:n_draws], ncol = n_draws)
-        predicted_prophet <- inv_trans(predicted_prophet, method = trans_y)
+        predicted_prophet <- inv_trans(predicted_prophet, train_df_ctry_last$pop)
         test_df_ctry$prophet[[k]] <- predicted_prophet
       }
       if ("cori" %in% models) {
@@ -108,9 +105,8 @@ run_prediction <- function() {
     # save
     test_df_ctry <- test_df_ctry %>%
       dplyr::select(-date, -new_confirmed, -incidence) %>%
-      rename(n = n_ahead, date = date_ahead, 
-             new_confirmed = new_confirmed_ahead, incidence = incidence_ahead) %>%
-      dplyr::select(id, population, n, date, new_confirmed, incidence, all_of(models))
+      rename(n = n_ahead, date = date_ahead, new_confirmed = new_confirmed_ahead) %>%
+      dplyr::select(id, population, n, date, new_confirmed, all_of(models))
     saveRDS(test_df_ctry, paste0("predictions/", ctry, ".rds"))
   }
   
