@@ -71,7 +71,7 @@ run_prediction <- function() {
       
       # train and predict
       if ("arima" %in% models) {
-        trained_arima <- train(train_df_ctry$date, 
+        trained_arima <- train(train_df_ctry_last$date, 
                                train_df_ctry_last$inc_sqrt, 
                                method = "arima", 
                                iter = n_sample)
@@ -82,7 +82,7 @@ run_prediction <- function() {
         test_df_ctry$arima[[k]] <- predicted_arima
       } 
       if ("prophet" %in% models) {
-        trained_prophet <- train(train_df_ctry$date, 
+        trained_prophet <- train(train_df_ctry_last$date, 
                                  train_df_ctry_last$inc_sqrt, 
                                  method = "prophet", 
                                  cap = ctry_cap, 
