@@ -78,7 +78,7 @@ run_prediction <- function() {
         predicted_arima <- predict(trained_arima,
                                    seed = seed12345)
         predicted_arima <- matrix(predicted_arima[1:max_n,1:n_draws], ncol = n_draws)
-        predicted_arima <- inv_trans(predicted_arima, train_df_ctry_last$pop[1])
+        predicted_arima <- inv_trans(predicted_arima, test_df_ctry$population[1])
         test_df_ctry$arima[[k]] <- predicted_arima
       } 
       if ("prophet" %in% models) {
@@ -90,7 +90,7 @@ run_prediction <- function() {
                                  seed = seed12345)
         predicted_prophet <- predict(trained_prophet)
         predicted_prophet <- matrix(predicted_prophet[1:max_n,1:n_draws], ncol = n_draws)
-        predicted_prophet <- inv_trans(predicted_prophet, train_df_ctry_last$pop)
+        predicted_prophet <- inv_trans(predicted_prophet, test_df_ctry$pop[1])
         test_df_ctry$prophet[[k]] <- predicted_prophet
       }
       if ("cori" %in% models) {
@@ -104,7 +104,7 @@ run_prediction <- function() {
     
     # save
     test_df_ctry <- test_df_ctry %>%
-      dplyr::select(-date, -new_confirmed, -incidence) %>%
+      dplyr::select(-date, -new_confirmed) %>%
       rename(n = n_ahead, date = date_ahead, new_confirmed = new_confirmed_ahead) %>%
       dplyr::select(id, population, n, date, new_confirmed, all_of(models))
     saveRDS(test_df_ctry, paste0("predictions/", ctry, ".rds"))
