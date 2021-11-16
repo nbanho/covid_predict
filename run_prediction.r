@@ -25,7 +25,7 @@ run_prediction <- function() {
                             "FIN", "FRA", "DEU", "GRC", "HUN", "IRL", "ITA", "LVA",
                             "LTU", "NLD", "POL", "PRT", "ROU", "SVK",
                             "SVN", "ESP", "SWE", "GBR")[id_idx[1]:id_idx[2]]) %>%
-    mutate(inc_sqrt = trans(new_confirmed, population)) 
+    mutate(log_inc = trans(new_confirmed + 1, population, transfct = log)) 
   countries <- unique(df$id)
   
   for (j in 1:length(countries)) {
@@ -72,25 +72,25 @@ run_prediction <- function() {
       # train and predict
       if ("arima" %in% models) {
         trained_arima <- train(train_df_ctry_last$date, 
-                               train_df_ctry_last$inc_sqrt, 
+                               train_df_ctry_last$log_inc, 
                                method = "arima", 
                                iter = n_sample)
         predicted_arima <- predict(trained_arima,
                                    seed = seed12345)
         predicted_arima <- matrix(predicted_arima[1:max_n,1:n_draws], ncol = n_draws)
-        predicted_arima <- inv_trans(predicted_arima, test_df_ctry$population[1])
+        predicted_arima <- inv_trans(predicted_arima, test_df_ctry$population[1], transfct = exp)
         test_df_ctry$arima[[k]] <- predicted_arima
       } 
       if ("prophet" %in% models) {
         trained_prophet <- train(train_df_ctry_last$date, 
-                                 train_df_ctry_last$inc_sqrt, 
+                                 train_df_ctry_last$log_inc, 
                                  method = "prophet", 
                                  cap = ctry_cap, 
                                  mcmc.samples = n_sample, cores = n_chains,
                                  seed = seed12345)
         predicted_prophet <- predict(trained_prophet)
         predicted_prophet <- matrix(predicted_prophet[1:max_n,1:n_draws], ncol = n_draws)
-        predicted_prophet <- inv_trans(predicted_prophet, test_df_ctry$pop[1])
+        predicted_prophet <- inv_trans(predicted_prophet, test_df_ctry$pop[1], transfct = exp)
         test_df_ctry$prophet[[k]] <- predicted_prophet
       }
       if ("cori" %in% models) {
