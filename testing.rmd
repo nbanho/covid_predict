@@ -13,6 +13,7 @@ knitr::opts_chunk$set(echo = TRUE)
 # general
 library(tidyverse)
 library(tidybayes)
+library(lubridate)
 
 # default settings
 source("settings/defaults.r")
@@ -21,9 +22,15 @@ source("settings/defaults.r")
 source("utils/train.r")
 source("utils/predict.r")
 
-# renewable equation model based on EpiEstim
+# delays
+source("utils/delays.r")
+
+# EpiEstim
 source("models/cori.r")
 source("utils/predict.r")
+
+# Epidemia
+source("models/epidemia.r")
 
 # ARIMA
 source("models/arima.r")
@@ -50,7 +57,7 @@ countries <- c("DEU")
 BEL <- df %>%
   dplyr::filter(id == "BEL") %>%
   dplyr::filter(date >= "2020-09-01" & date <= "2021-01-01") %>%
-  dplyr::select(date, new_confirmed)
+  dplyr::select(id, date, population, new_confirmed)
 BEL_train <- dplyr::filter(BEL, date <= "2020-10-20")
 BEL_test <- BEL %>% dplyr::filter(date > "2020-10-20") %>% head(21)
 ```
@@ -190,6 +197,134 @@ ggplot() +
 ```
 
 
+## Epidemia
+
+### Under the hood
+
+```{r}
+data <- df %>%
+  dplyr::filter(id == "AUT") %>%
+  arrange(date) %>%
+  slice(1:90) %>%
+  mutate(o = 1,
+         week = format(date, "%V"))
+
+# model the rep number as weekly random walk (no covariates)
+rt <- epirt(
+  formula = R(id, date) ~ 1 + rw(time = week, prior_scale = 0.1),
+  prior_intercept = rstanarm::normal(log(3), 0.3), 
+  link = 'log'
+)
+
+# model infections with serial interval for generation time distribution
+gen_distr <- vp(xT = 10, from0 = F, FUN = p_g)
+gen_distr <- gen_distr / sum(gen_distr)
+inf <- epiinf(
+  gen = gen_distr,
+  pop_adjust = T,
+  pops = "population",
+  latent = TRUE,
+  prior_aux = rstanarm::normal(10,2)
+)
+
+# model observed cases as a proportion of infections constant over time
+i2o_distr <- vp(xT = 30, from0 = F, FUN = p_in)
+i2o_distr <- i2o_distr / sum(i2o_distr)
+obs <- epiobs(
+  formula = new_confirmed ~ 0 + offset(o),
+  link = "identity",
+  i2o = i2o_distr
+)
+
+# fit the model with various model params
+args <- list(rt = rt, obs = obs, inf = inf, data = data,  
+             chains = 4, iter = 500, cores = 4, seed = 12345, control = list(adapt_delta = 0.95, max_treedepth = 15))
+fit <- do.call(epim, args)
+
+# predict
+test_data <- df %>%
+  dplyr::filter(id == "AUT") %>%
+  arrange(date) %>%
+  slice(91:111) %>%
+  mutate(o = 1,
+         week = format(date, "%V"))
+
+pred <- posterior_predict(fit, newdata = test_data)
+pred_data <- cbind(date = pred$time, data.frame(t(pred$draws))) %>%
+  reshape2::melt(c("date")) 
+
+ggplot(mapping = aes(x = date)) +
+  stat_lineribbon(data = pred_data, mapping = aes(y = value)) +
+  geom_line(data = test_data, mapping = aes(y = new_confirmed)) +
+  scale_fill_brewer()
+```
+
+### Test functions
+
+```{r}
+fit <- train.epidemia(data %>% rename(y = new_confirmed, pop = population), chain = 1, iter = 500)
+pred <- predict.epidemia(fit, d = 100)
+```
+
+
+### Train & Pred
+
+```{r}
+results_ep <- list()
+
+for (j in 1:length(countries)) {
+  
+  # data
+  ctry <- countries[j]
+  df_ctry <- subset(df, id == ctry) 
+  
+  # test data
+  test_df_ctry <- slice(df_ctry, (n_train+1):nrow(df_ctry))
+  
+  # predictions
+  pred_mat <- matrix(NA, ncol = n_preds, nrow = nrow(test_df_ctry))
+  for (k in 1:nrow(test_df_ctry)) {
+    train_df_ctry <- slice(df_ctry, 1:(n_train+k-1))
+    trained_model <- train(dat = train_df_ctry %>% rename(target = new_confirmed), 
+                           method = "epidemia", 
+                           chains = 4, cores = 4, iter = 1000)
+    preds <- predict(trained_model, d = 1000)
+    mean_preds <- rowMeans(preds)
+    pred_mat[i, ] <- mean_preds
+  }
+  
+  # combine
+  pred_df <- data.frame(pred_mat) %>%
+    set_names(paste0("pred_ahead_", 1:n_preds)) %>%
+    mutate(id = ctry,
+           date = test_df_ctry$date) %>%
+    reshape2::melt(c("id", "date"))  %>%
+    rename(n_ahead = variable) %>%
+    mutate(n_ahead = as.numeric(stringi::stri_extract(n_ahead, regex = "\\d{1,2}"))) %>%
+    mutate(date = date %m+% days(n_ahead))
+  write_csv(pred_df, paste0("predictions/epidemia/", ctry, ".csv"))
+  results_ep[[j]] <- pred_df
+}
+
+results_ep_df <- do.call(rbind, results_ep)
+results_ep_df <- left_join(results_ep_df, dplyr::select(df, id, date, new_confirmed))
+```
+
+
+### Evaluation
+
+```{r}
+ggplot() +
+  geom_line(data = results_ep_df, mapping = aes(x = date, y = value, color = n_ahead)) +
+  geom_line(data = subset(results_ep_df, n_ahead == 1), mapping = aes(x = date, y = new_confirmed), color = "black") +
+  facet_wrap(~ id) +
+  scale_color_viridis_c() +
+  labs(y = "Number of new cases", color = "N") +
+  theme_bw() +
+  theme(axis.title.x = element_blank())
+```
+
+
 ## ARIMA
 
 ### Toy example
@@ -217,8 +352,7 @@ for (j in 1:length(countries)) {
   
   # data
   ctry <- countries[j]
-  df_ctry <- subset(df, id == ctry) %>%
-    dplyr::filter(date >= "2020-02-01")
+  df_ctry <- subset(df, id == ctry) 
   
   # test data
   test_df_ctry <- slice(df_ctry, (n_train+1):nrow(df_ctry))
@@ -226,21 +360,15 @@ for (j in 1:length(countries)) {
   # predictions
   pred_mat <- matrix(NA, ncol = n_preds, nrow = nrow(test_df_ctry))
   for (k in 1:nrow(test_df_ctry)) {
-    #train_df_ctry <- slice(df_ctry, 1:(n_train+k-1))
     train_df_ctry <- slice(df_ctry, tail(1:(n_train+k-1), 90))
-    trained_model <- train.arima(train_df_ctry$new_confirmed, iter = 500)
-    trained_model2 <- train.arima(log(train_df_ctry$new_confirmed/train_df_ctry$population*1e5), iter = 500)
+    # train_df_ctry <- slice(df_ctry, 1:(n_train+k-1))
+    train_df_ctry$log_inc <- log((train_df_ctry$new_confirmed+1)/train_df_ctry$population*1e5)
+    trained_model <- train.arima(train_df_ctry$log_inc, iter = 1000)
+    #trained_model <- train.arima(train_df_ctry$new_confirmed, iter = 1000)
     preds <- predict.arima(trained_model, d = 1000)
-    preds2 <- predict.arima(trained_model2, d = 1000)
     mean_preds <- rowMeans(preds)
-    q95 <- apply(preds, 1, quantile, probs = .99)
-    q95_2 <- apply(preds2, 1, function(x) quantile(exp(x) * train_df_ctry$population[1] / 1e5, probs = .99))
-    if(any(q95 > 1e5)) {
-      bad_model = trained_model
-      stop("High pred")
-      break
-    }
-    pred_mat[k, ] <- mean_preds
+    #pred_mat[k, ] <- mean_preds
+    pred_mat[k, ] <- exp(mean_preds) * train_df_ctry$population[1] / 1e5 -1
   }
   
   # combine
@@ -248,9 +376,10 @@ for (j in 1:length(countries)) {
     set_names(paste0("pred_ahead_", 1:n_preds)) %>%
     mutate(id = ctry,
            date = test_df_ctry$date) %>%
-    reshape2::melt(c("id", "date")) %>%
+    reshape2::melt(c("id", "date"))  %>%
     rename(n_ahead = variable) %>%
-    mutate(n_ahead = as.numeric(stringi::stri_extract(n_ahead, regex = "\\d{1,2}")))
+    mutate(n_ahead = as.numeric(stringi::stri_extract(n_ahead, regex = "\\d{1,2}"))) %>%
+    mutate(date = date %m+% days(n_ahead))
   write_csv(pred_df, paste0("predictions/arima/", ctry, ".csv"))
   results_am[[j]] <- pred_df
 }
