@@ -39,7 +39,10 @@ run_prediction <- function() {
       slice((n_train+1):nrow(df_ctry)) %>%
       as_tibble() %>%
       mutate(n_ahead = list(NA), date_ahead = list(NA), new_confirmed_ahead = list(NA)) 
-    if ("arima" %in% models) { test_df_ctry$arima <- list(NA) }
+    if ("arima" %in% models) { 
+      test_df_ctry$arima <- list(NA)
+      test_df_ctry$diagn_arima <- list(NA)
+    }
     if ("cori" %in% models) { test_df_ctry$cori <- list(NA) }
     if ("prophet" %in% models) { test_df_ctry$prophet <- list(NA) }
     
@@ -50,17 +53,17 @@ run_prediction <- function() {
     }
     
     # for prophet: set max cap a little bit above maximum observed incidence among all countries
-    if ("prophet" %in% models) {
-      ctry_cap <- sqrt(prophet.max_inc)
-    }
+    # if ("prophet" %in% models) {
+    #   ctry_cap <- sqrt(prophet.max_inc)
+    # }
     
     # loop over test set
     for (k in 1:nrow(test_df_ctry)) {
       
       # train data
       train_df_ctry <- slice(df_ctry, 1:(n_train+k-1))
-      # use only last 3 months to fit model, except cori, which uses even less
-      #train_df_ctry_last <- tail(train_df_ctry, 90) 
+      # use only last 3 months to fit model, except cori, which effectively uses even less
+      train_df_ctry_last <- tail(train_df_ctry, 90) 
       
       # test data
       pred_df <- slice(test_df_ctry, k:(k-1+n_preds)) 
@@ -69,31 +72,47 @@ run_prediction <- function() {
       test_df_ctry$date_ahead[[k]] <- pred_df$date
       test_df_ctry$new_confirmed_ahead[[k]] <- pred_df$new_confirmed
       
-      # train and predict
+      # train and predict for each model
       if ("arima" %in% models) {
-        trained_arima <- train(train_df_ctry$date, 
-                               train_df_ctry$log_inc, 
+        # train
+        trained_arima <- train(train_df_ctry_last$date, 
+                               train_df_ctry_last$log_inc, 
                                method = "arima", 
                                iter = n_sample)
+        
+        # diagnostics
+        no_of_ar <- n_ar(trained_arima)
+        no_of_ma <- n_ma(trained_arima)
+        max_Rhat <- max.Rhat(trained_arima)
+        prop_div_trans <- share_divergent(trained_arima$stanfit)
+        test_df_ctry$diagn_arima[[k]] <- list(no_of_ar, no_of_ma, max_Rhat, prop_div_trans)
+        
+        # predict
         predicted_arima <- predict(trained_arima,
                                    seed = seed12345)
         predicted_arima <- matrix(predicted_arima[1:max_n,1:n_draws], ncol = n_draws)
         predicted_arima <- inv_trans(predicted_arima, test_df_ctry$population[1], transfct = exp)
         test_df_ctry$arima[[k]] <- predicted_arima
       } 
+      
       if ("prophet" %in% models) {
+        # train
         trained_prophet <- train(train_df_ctry_last$date, 
                                  train_df_ctry_last$log_inc, 
                                  method = "prophet", 
-                                 cap = ctry_cap, 
+                                 # cap = ctry_cap, 
                                  mcmc.samples = n_sample, cores = n_chains,
                                  seed = seed12345)
+        
+        # predict
         predicted_prophet <- predict(trained_prophet)
         predicted_prophet <- matrix(predicted_prophet[1:max_n,1:n_draws], ncol = n_draws)
         predicted_prophet <- inv_trans(predicted_prophet, test_df_ctry$pop[1], transfct = exp)
         test_df_ctry$prophet[[k]] <- predicted_prophet
       }
+      
       if ("cori" %in% models) {
+        # predict
         predicted_cori <- predict(trained_cori, 
                                   i = n_train+k-1,
                                   seed = seed12345,
