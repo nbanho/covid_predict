@@ -13,6 +13,10 @@ predict <- function(
     
     preds <- predict.cori(estimate_R_obj = train_obj, n = n, d = d, ...)
     
+  } else if (class(train_obj) == "epimodel") {
+    
+    pred <- predict.epidemia(epidemia_obj = train_obj, n = n, d = d, ...)
+    
   } else if (class(train_obj)[1] == "varstan") {
     
     preds <- predict.arima(varstan_obj = train_obj, n = n, d = d, ...)

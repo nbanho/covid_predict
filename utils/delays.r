@@ -1,16 +1,28 @@
 # distribution from infection to reporting of new case
-# parameters from Brauner et al 2020
-p_in <- function(x, mu, sigma) { 
+# parameters from our study
+p_in <- function(x, mu = 2.47, sigma = 0.45, is_log = T) { 
   
-  # log mean and sd
-  log_mu <- log(mu^2 / sqrt(mu^2 + sigma^2))
-  log_sigma <- sqrt( log(1 + sigma^2 / mu^2) )
+  if (is_log) {
+    log_mu <- mu
+    log_sigma <- sigma
+  } else {
+    # log mean and sd
+    log_mu <- log(mu^2 / sqrt(mu^2 + sigma^2))
+    log_sigma <- sqrt( log(1 + sigma^2 / mu^2) ) 
+  }
   
   # p
   p <- plnorm(x, log_mu, log_sigma)
   
   return( p )
 }
+
+# generation time distribution
+# From Ferretti: Weibull(3.2862, 6.1244)
+p_g <- function(x, distr = "weibull", p1 = 3.2862, p2 = 6.1244) { 
+  if (distr == "weibull") { pweibull(x, p1, p2) }
+}
+
 
 
 # Vectorize delay function

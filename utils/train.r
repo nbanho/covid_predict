@@ -1,22 +1,27 @@
 # train model
 train <- function(
-  date, # date
-  target, # target
+  dat, # a data frame with columns new_confirmed, population, date
   method = "prophet", # model
   ... # additional model-specific parameters
   ) {
   
   if (method == "cori") {
     
-    return( train.cori(target, ...) )
+    return( train.cori(dat$target, ...) )
     
+  } else if (method == "epidemia") { 
+    
+    data = dat %>% rename(cases = target) %>% mutate(id = "A")
+    return( train.epidemia(data, ...) )
+      
   } else if (method == "arima") {
     
-    return( train.arima(target, ...) )
+    return( train.arima(dat$target, ...) )
     
   } else if (method == "prophet") {
     
-    return( train.prophet(data.frame(ds = date, y = target), ...) )
+    dsy <- dat %>% rename(ds = date, y = target)
+    return( train.prophet(dsy, ...) )
     
   }
   

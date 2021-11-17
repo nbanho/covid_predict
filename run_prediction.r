@@ -44,6 +44,7 @@ run_prediction <- function() {
       test_df_ctry$diagn_arima <- list(NA)
     }
     if ("cori" %in% models) { test_df_ctry$cori <- list(NA) }
+    if ("epidemia" %in% models) { test_df_ctry$epidemia <- list(NA) }
     if ("prophet" %in% models) { test_df_ctry$prophet <- list(NA) }
     
     # for EpiEstim, get all R estimates right away
@@ -75,8 +76,7 @@ run_prediction <- function() {
       # train and predict for each model
       if ("arima" %in% models) {
         # train
-        trained_arima <- train(train_df_ctry_last$date, 
-                               train_df_ctry_last$log_inc, 
+        trained_arima <- train(train_df_ctry_last %>% rename(target = log_inc), 
                                method = "arima", 
                                iter = n_sample)
         
@@ -97,8 +97,7 @@ run_prediction <- function() {
       
       if ("prophet" %in% models) {
         # train
-        trained_prophet <- train(train_df_ctry_last$date, 
-                                 train_df_ctry_last$log_inc, 
+        trained_prophet <- train(train_df_ctry_last %>% rename(target = log_inc), 
                                  method = "prophet", 
                                  # cap = ctry_cap, 
                                  mcmc.samples = n_sample, cores = n_chains,
@@ -113,11 +112,24 @@ run_prediction <- function() {
       
       if ("cori" %in% models) {
         # predict
-        predicted_cori <- predict(trained_cori, 
+        predicted_cori <- predict(trained_cori %>% rename(target = new_confirmed), 
                                   i = n_train+k-1,
                                   seed = seed12345,
                                   d = n_draws)
         test_df_ctry$cori[[k]] <- matrix(predicted_cori[1:max_n,1:n_draws], ncol = n_draws)
+      }
+      
+      if ("epidemia" %in% models) {
+        # train
+        trained_epidemia <- train(train_df_ctry %>% rename(target = new_confirmed),  
+                                 method = "epidemia",
+                                 mcmc.samples = n_sample, cores = n_chains,
+                                 seed = seed12345)
+        
+        # predict
+        predicted_epidemia <- predict(trained_epidemia)
+        predicted_epidemia <- matrix(predictedepidemia[1:max_n,1:n_draws], ncol = n_draws)
+        test_df_ctry$prophet[[k]] <- predicted_epidemia
       }
     }
     
