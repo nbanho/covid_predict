@@ -2,19 +2,26 @@ library(prophet)
 
 train.prophet <- function(
   dsy, # df with date column (ds) and time series (y) 
-  cap,
-  floor = 0,
+  cap = NULL,
+  floor = NULL,
   ... # additional model parameters
 ) {
   
-  # set floor
-  dsy$floor <- floor
-  dsy$cap <- cap 
+  # set cap and floor for logistic growth trend
+  if (!is.null(cap)) { 
+    gr <- "logistic"
+    dsy$cap <- cap
+  } 
+  else {
+    gr <- "linear" 
+  }
+  if (!is.null(floor)) { 
+    dsy$floor <- floor 
+  }
+   
   
   # fit
-  fit <- prophet(dsy, growth = "logistic", 
-                 yearly.seasonality = F, weekly.seasonality = F, daily.seasonality = F,
-                 ...)  
+  fit <- prophet(dsy, growth = gr, yearly.seasonality = F, weekly.seasonality = F, daily.seasonality = F, ...)  
   
   return(fit)
 }
@@ -27,8 +34,8 @@ predict.prophet <- function(
 ) {
   
   future <- make_future_dataframe(prophet_obj, periods = n)
-  future$cap <- prophet_obj$history$cap[1]
-  future$floor <- prophet_obj$history$floor[1]
+  if (!is.null(prophet_obj$history$cap[1])) {future$cap <- prophet_obj$history$cap[1]}
+  if (!is.null(prophet_obj$history$floor[1])) {future$floor <- prophet_obj$history$floor[1]}
   pred <- predictive_samples(prophet_obj, future)
   pred <- tail(pred$yhat, n)
   

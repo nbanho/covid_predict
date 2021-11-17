@@ -22,4 +22,4 @@ cori.n1 <- cori.n2 * cori.n1n2_ratio
 n_chains <- 4
 
 # maximum expected incidence
-prophet.max_inc <- 250 # 25% above the highest observed incidence per 1e5 pop. from BEL and ESP
+# prophet.max_inc <- 250 # 25% above the highest observed incidence per 1e5 pop. from BEL and ESP
