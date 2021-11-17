@@ -60,7 +60,7 @@ run_prediction <- function() {
       # train data
       train_df_ctry <- slice(df_ctry, 1:(n_train+k-1))
       # use only last 3 months to fit model, except cori, which uses even less
-      train_df_ctry_last <- tail(train_df_ctry, 90) 
+      #train_df_ctry_last <- tail(train_df_ctry, 90) 
       
       # test data
       pred_df <- slice(test_df_ctry, k:(k-1+n_preds)) 
@@ -71,8 +71,8 @@ run_prediction <- function() {
       
       # train and predict
       if ("arima" %in% models) {
-        trained_arima <- train(train_df_ctry_last$date, 
-                               train_df_ctry_last$log_inc, 
+        trained_arima <- train(train_df_ctry$date, 
+                               train_df_ctry$log_inc, 
                                method = "arima", 
                                iter = n_sample)
         predicted_arima <- predict(trained_arima,
