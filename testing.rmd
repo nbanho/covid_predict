@@ -52,20 +52,13 @@ df <- read_csv("data/prep_jhu_all_countries.csv") %>%
 
 # country to test loop
 countries <- c("DEU")
-
-# subset to test how to
-BEL <- df %>%
-  dplyr::filter(id == "BEL") %>%
-  dplyr::filter(date >= "2020-09-01" & date <= "2021-01-01") %>%
-  dplyr::select(id, date, population, new_confirmed)
-BEL_train <- dplyr::filter(BEL, date <= "2020-10-20")
-BEL_test <- BEL %>% dplyr::filter(date > "2020-10-20") %>% head(21)
 ```
 
 ### New cases
 
 ```{r}
 df %>% 
+  dplyr::filter(date <= "2020-05-01") %>%
   ggplot(aes(x = date, y = new_confirmed)) +
   geom_line() +
   facet_wrap(~ id, scales = "free_y")
@@ -88,24 +81,33 @@ df %>%
 
 ```{r}
 # configure serial interval
+# config_si <- make_config(
+#     method = "uncertain_si",
+#     mean_si = 5.61,
+#     std_mean_si = 0.30,
+#     min_mean_si = 5.61 - 2,
+#     max_mean_si = 5.61 + 2,
+#     std_si = 4.83,
+#     std_std_si = 0.37,
+#     min_std_si = 4.83 - 2,
+#     max_std_si = 4.83 + 2,
+#     n1 = 100,
+#     n2 = 40,
+#     seed = 1)
 config_si <- make_config(
-    method = "uncertain_si",
-    mean_si = 5.61,
-    std_mean_si = 0.30,
-    min_mean_si = 5.61 - 2,
-    max_mean_si = 5.61 + 2,
-    std_si = 4.83,
-    std_std_si = 0.37,
-    min_std_si = 4.83 - 2,
-    max_std_si = 4.83 + 2,
-    n1 = 100,
-    n2 = 40,
-    seed = 1)
+  method = "non_parametric_si",
+  si_distr = vp(xT = 10, from0 = F, FUN = p_g))
+
+# data
+data <- df %>%
+  dplyr::filter(id == "AUT") %>%
+  arrange(date) %>%
+  slice(1:90)
 
 # Estimate R
 est_R <- estimate_R(
-  incid = BEL_train$new_confirmed,
-  method = "uncertain_si",
+  incid = data$new_confirmed,
+  method = "non_parametric_si",
   config = config_si)
 
 # Simulate plausible R
@@ -118,17 +120,23 @@ plausible_r <- rgamma(4e3, shape = shapescale$shape, scale = shapescale$scale)
 # make projections
 inc <- incidence(est_R$dates)
 inc$counts <- as.matrix(est_R$I)
-sis <- lapply(seq_len(nrow(est_R$si_distr)), function(i) est_R$si_distr[i, ])
-proj <- map(sis, function(S) as.matrix(project(x = inc, R = plausible_r, si = S[-1], n_sim = 40, n_days = 21)))
-proj <- do.call(cbind, proj)
+#sis <- lapply(seq_len(nrow(est_R$si_distr)), function(i) est_R$si_distr[i, ])
+#proj <- map(sis, function(S) as.matrix(project(x = inc, R = plausible_r, si = S[-1], n_sim = 40, n_days = 21)))
+#proj <- do.call(cbind, proj)
+proj <- project(inc, plausible_r, config_si$si_distr[-1], n_sim = 4e3, model = "negbin", instantaneous_R = T)
 
-# compare with observed 
-BEL_pred <- cbind(date = BEL_test$date, data.frame(proj)) %>%
+# evaluation
+test_data <- df %>%
+  dplyr::filter(id == "AUT") %>%
+  arrange(date) %>%
+  slice(91:111)
+
+pred <- cbind(date = test_data$date, data.frame(proj)) %>%
   reshape2::melt(c("date")) 
 
 ggplot(mapping = aes(x = date)) +
-  stat_lineribbon(data = BEL_pred, mapping = aes(y = value)) +
-  geom_line(data = BEL_test, mapping = aes(y = new_confirmed)) +
+  stat_lineribbon(data = pred, mapping = aes(y = value)) +
+  geom_line(data = test_data, mapping = aes(y = new_confirmed)) +
   scale_fill_brewer()
 ```
 
@@ -136,10 +144,10 @@ ggplot(mapping = aes(x = date)) +
 
 ```{r}
 # train
-cori.fit <- train.cori(BEL_train$new_confirmed, n1 = 100, n2 = 10, seed = 1)
+cori.fit <- train.cori(data$new_confirmed)
 
 # predict
-cori.proj <- predict.cori(estimate_R_obj = cori.fit, d = 1e3, n = 21, seed = 1)
+cori.proj <- predict.cori(estimate_R_obj = cori.fit)
 ```
 
 ### Train & Pred
@@ -157,7 +165,7 @@ for (j in 1:length(countries)) {
   test_df_ctry <- slice(df_ctry, (n_train+1):nrow(df_ctry))
   
   # R estimates
-  trained_cori <- train(df_ctry$date, df_ctry$new_confirmed, method = "cori", n1 = 100, n2 = 10)
+  trained_cori <- train(df_ctry %>% rename(target = new_confirmed), method = "cori")
   
   # predictions
   pred_mat <- matrix(NA, ncol = n_preds, nrow = nrow(test_df_ctry))
@@ -172,9 +180,10 @@ for (j in 1:length(countries)) {
     set_names(paste0("pred_ahead_", 1:n_preds)) %>%
     mutate(id = ctry,
            date = test_df_ctry$date) %>%
-    reshape2::melt(c("id", "date")) %>%
+    reshape2::melt(c("id", "date"))  %>%
     rename(n_ahead = variable) %>%
-    mutate(n_ahead = as.numeric(stringi::stri_extract(n_ahead, regex = "\\d{1,2}")))
+    mutate(n_ahead = as.numeric(stringi::stri_extract(n_ahead, regex = "\\d{1,2}"))) %>%
+    mutate(date = date %m+% days(n_ahead))
   write_csv(pred_df, paste0("predictions/cori/", ctry, ".csv"))
   results_ee[[j]] <- pred_df
 }
