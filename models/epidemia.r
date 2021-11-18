@@ -15,7 +15,7 @@ train.epidemia <- function(
   rt <- epirt(
     formula = R(id, date) ~ 1 + rw(time = week, prior_scale = 0.1),
     prior_intercept = rstanarm::normal(log(3), 0.3), 
-    link = 'log'
+    link = scaled_logit(K = 6)
   )
   
   # model infections with serial interval for generation time distribution
