@@ -4,7 +4,7 @@ dat <- read_csv("data/jhu_all_countries.csv")
 
 dat <- dat %>%
   group_by(id) %>%
-  dplyr::filter(confirmed >= 100) %>%
+  dplyr::filter(confirmed >= 10) %>%
   mutate_at(vars(vaccines, tests, confirmed, recovered, deaths, hosp, vent, icu), function(x) ifelse(is.na(x), 0, x)) %>%
   arrange(date) %>%
   mutate(new_confirmed_raw = dplyr::lead(confirmed) - confirmed) %>%
