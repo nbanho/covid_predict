@@ -16,6 +16,7 @@ run_prediction <- function() {
   
   # models
   source("models/cori.r")
+  source("models/epidemia.r")
   source("models/arima.r")
   source("models/prophet.r")
   
@@ -122,14 +123,14 @@ run_prediction <- function() {
       if ("epidemia" %in% models) {
         # train
         trained_epidemia <- train(train_df_ctry %>% rename(target = new_confirmed),  
-                                 method = "epidemia",
-                                 mcmc.samples = n_sample, cores = n_chains,
-                                 seed = seed12345)
+                                  method = "epidemia",
+                                  iter = n_sample, cores = n_chains,
+                                  seed = seed12345)
         
         # predict
         predicted_epidemia <- predict(trained_epidemia)
         predicted_epidemia <- matrix(predicted_epidemia[1:max_n,1:n_draws], ncol = n_draws)
-        test_df_ctry$prophet[[k]] <- predicted_epidemia
+        test_df_ctry$epidemia[[k]] <- predicted_epidemia
       }
     }
     
