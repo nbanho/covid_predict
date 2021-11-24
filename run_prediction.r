@@ -128,7 +128,7 @@ run_prediction <- function() {
         
         # predict
         predicted_epidemia <- predict(trained_epidemia)
-        predicted_epidemia <- matrix(predictedepidemia[1:max_n,1:n_draws], ncol = n_draws)
+        predicted_epidemia <- matrix(predicted_epidemia[1:max_n,1:n_draws], ncol = n_draws)
         test_df_ctry$prophet[[k]] <- predicted_epidemia
       }
     }
@@ -137,7 +137,7 @@ run_prediction <- function() {
     test_df_ctry <- test_df_ctry %>%
       dplyr::select(-date, -new_confirmed) %>%
       rename(n = n_ahead, date = date_ahead, new_confirmed = new_confirmed_ahead) %>%
-      dplyr::select(id, population, n, date, new_confirmed, all_of(models))
+      dplyr::select(id, population, n, date, new_confirmed, all_of(models), contains("diagn_arima"))
     saveRDS(test_df_ctry, paste0("predictions/", ctry, ".rds"))
   }
   
