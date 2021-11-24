@@ -13,7 +13,7 @@ predict <- function(
     
     preds <- predict.cori(estimate_R_obj = train_obj, n = n, d = d, ...)
     
-  } else if (class(train_obj) == "epimodel") {
+  } else if (class(train_obj)[1] == "epimodel") {
     
     pred <- predict.epidemia(epidemia_obj = train_obj, n = n, d = d, ...)
     

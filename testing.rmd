@@ -453,10 +453,9 @@ for (j in 1:length(countries)) {
   for (k in 1:nrow(test_df_ctry)) {
     train_df_ctry <- df_ctry %>%
       slice(1:(n_train+k-1)) %>%
-      dplyr::select(date, new_confirmed) %>%
-      set_names(c("ds", "y"))
-    trained_model <- train.prophet(train_df_ctry)
-    preds <- predict.prophet(trained_model)
+      rename(target = new_confirmed)
+    trained_model <- train(train_df_ctry)
+    preds <- predict(trained_model)
     mean_preds <- rowMeans(preds)
     pred_mat[k, ] <- mean_preds
   }

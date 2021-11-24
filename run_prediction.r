@@ -106,7 +106,7 @@ run_prediction <- function() {
         # predict
         predicted_prophet <- predict(trained_prophet)
         predicted_prophet <- matrix(predicted_prophet[1:max_n,1:n_draws], ncol = n_draws)
-        predicted_prophet <- inv_trans(predicted_prophet, test_df_ctry$pop[1], transfct = exp)
+        predicted_prophet <- inv_trans(predicted_prophet, test_df_ctry$population[1], transfct = exp)
         test_df_ctry$prophet[[k]] <- predicted_prophet
       }
       
