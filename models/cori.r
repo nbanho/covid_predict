@@ -40,7 +40,7 @@ train.cori <- function(
   estimate_R(
     incid = new_infected,
     method = "non_parametric_si",
-    config = config_si)
+    config = config_g)
   
 }
 
