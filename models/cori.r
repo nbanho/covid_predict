@@ -7,35 +7,34 @@ library(incidence)
 # utils
 source("utils/delays.r")
 
+# use estimated serial interval
+# based on meta analysis: https://www.medrxiv.org/content/10.1101/2020.11.17.20231548v1.full-text 
+# See Supplementary Material Tabl. 2 Mean and SD for Gamma 
+# min/Max set large enough and symmetric
+# config_si <- make_config(
+#   method = "uncertain_si",
+#   mean_si = 5.61,
+#   std_mean_si = 0.30,
+#   min_mean_si = 5.61 - 3,
+#   max_mean_si = 5.61 + 3,
+#   std_si = 4.83,
+#   std_std_si = 0.37,
+#   min_std_si = 4.83 - 3,
+#   max_std_si = 4.83 + 3,
+#   ...)
+
+# use generation interval from Ferretti et al
+config_g <- make_config(
+  method = "non_parametric_si",
+  si_distr = vp(xT = 10, from0 = F, FUN = p_g)
+)
+
 
 # train
 train.cori <- function(
   new_infected, # number of new infections
   ... # additional arguments to make_config (n1, n2, seed)
   ) {
-  
-  # use estimated serial interval
-  # based on meta analysis: https://www.medrxiv.org/content/10.1101/2020.11.17.20231548v1.full-text 
-  # See Supplementary Material Tabl. 2 Mean and SD for Gamma 
-  # min/Max set large enough and symmetric
-  # config_si <- make_config(
-  #   method = "uncertain_si",
-  #   mean_si = 5.61,
-  #   std_mean_si = 0.30,
-  #   min_mean_si = 5.61 - 3,
-  #   max_mean_si = 5.61 + 3,
-  #   std_si = 4.83,
-  #   std_std_si = 0.37,
-  #   min_std_si = 4.83 - 3,
-  #   max_std_si = 4.83 + 3,
-  #   ...)
-  
-  # use generation interval from Ferretti et al
-  config_g <- make_config(
-    method = "non_parametric_si",
-    si_distr = vp(xT = 10, from0 = F, FUN = p_g)
-  )
-  
   # estimate R over time
   estimate_R(
     incid = new_infected,
@@ -76,7 +75,7 @@ predict.cori <- function(
   #ns <- ceiling(d / nrow(estimate_R_obj$si_distr))
   #proj <- map(sis, function(S) as.matrix(project(x = inc, R = plausible_r, si = S[-1], n_sim = ns, n_days = n)))
   #proj <- do.call(cbind, proj)
-  proj <- project(inc, plausible_r, config_si$si_distr[-1], n_sim = d, n_days = n, model = "negbin", size = 0.03, instantaneous_R = T)
+  proj <- project(inc, plausible_r, config_g$si_distr[-1], n_sim = d, n_days = n, model = "negbin", size = 0.03, instantaneous_R = T)
   
   return(as.matrix(proj))
 }

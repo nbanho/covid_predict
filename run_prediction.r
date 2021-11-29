@@ -50,7 +50,7 @@ run_prediction <- function() {
     
     # for EpiEstim, get all R estimates right away
     if ("cori" %in% models) {
-      trained_cori <- train(df_ctry$date, df_ctry$new_confirmed, method = "cori",
+      trained_cori <- train(df_ctry %>% rename(target = new_confirmed), method = "cori",
                             n1 = cori.n1, n2 = cori.n2, seed = seed12345)
     }
     
@@ -113,7 +113,7 @@ run_prediction <- function() {
       
       if ("cori" %in% models) {
         # predict
-        predicted_cori <- predict(trained_cori %>% rename(target = new_confirmed), 
+        predicted_cori <- predict(trained_cori, 
                                   i = n_train+k-1,
                                   seed = seed12345,
                                   d = n_draws)
