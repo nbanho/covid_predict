@@ -21,6 +21,7 @@ source("settings/defaults.r")
 # train and predict utils
 source("utils/train.r")
 source("utils/predict.r")
+source("utils/transform.r")
 
 # delays
 source("utils/delays.r")
@@ -492,19 +493,96 @@ ggplot() +
 
 ## Gaussian Process
 
-```{r}
-library(plgp)
-library(mvtnorm)
 
-X <- df %>%
-  dplyr::filter(id == countries[1]) %>%
-  dplyr::select(new_confirmed) %>%
-  slice(1:100) %>%
-  as.matrix()
-n <- nrow(X)
-D <- distance(X)
-eps <- sqrt(.Machine$double.eps)
-Sigma <- exp(-D) + diag(eps, n)
-Y <- rmvnorm(4e3, mean = c(X), sigma = Sigma)
-plot(rowMeans(Y), type = "l")
+### Under the hood
+
+```{r}
+# prior
+sim_data <- list(T = 90,
+                 x = 1:90,
+                 sig = 1,
+                 c0 = 45,
+                 alpha1 = .1,
+                 rho1 = 1,
+                 alpha2 = 0.2,
+                 rho2 = 1,
+                 alpha3 = 10,
+                 rho3 = 90)
+gp_prior <- stan(file='models/gp_prior.stan', data=sim_data,
+                 warmup=0, iter=4000, chains=1, seed=494838,
+                 algorithm="Fixed_param", refresh=4000)
+
+prior_draws <- gp_prior %>%
+  spread_draws(y[x]) %>%
+  subset( .draw %in% sample(1:4000, 10)) 
+
+prior_draws %>%
+  ggplot(aes(x=x,y=y,group=as.factor(.draw), color = as.factor(.draw))) +
+  geom_line()
+
+
+library(cmdstanr)
+library(posterior)
+library(bayesplot)
+
+# train data
+n0 <- 1
+n <- 30
+data <- df %>%
+  dplyr::filter(id == "DEU") %>%
+  slice(n0:n) %>%
+  mutate(x = n0:n) %>%
+  mutate(log_inc = trans(new_confirmed, population, transfct = function(x) log(x + 1)))
+
+mean_li <- mean(data$log_inc)
+
+plot(data$log_inc)
+
+# test data
+test_data <- df %>%
+  dplyr::filter(id == "DEU") %>%
+  slice((n+1):(n+21)) %>%
+  mutate(x = (n+1):(n+21)) %>%
+  mutate(log_inc = trans(new_confirmed, population, transfct = function(x) log(x + 1)))
+
+data_list <- list(N1 = nrow(data), 
+                  N2 = (n-n0+1)+21,
+                  y1 = data$log_inc, 
+                  x1 = data$x,
+                  x2 = c(data$x, test_data$x))
+
+# train
+gamma_prior_param <- stan("models/tune_inv_gamma_prior.stan", data = list(l = 7, u = (n-n0+1)),
+                          iter = 1, warmup = 0, chains = 1, seed = 123213, algorithm = "Fixed_param")
+data_list$rho1_shape = summary(gamma_prior_param)$summary["shape",1]
+data_list$rho1_scale = summary(gamma_prior_param)$summary["scale",1]
+gp_mod <- cmdstan_model("models/gp.stan")
+gp_mod_fit <- gp_mod$sample(
+  data =  data_list,
+  seed = 12345,
+  chains = 2,
+  parallel_chains = 2,
+  iter_warmup = 500, 
+  iter_sampling = 500,
+  save_warmup = T
+)
+gp_mod_fit$summary(c("sigma", "alpha0", "rho1", "alpha1", "alpha2", "rho2"))
+np = nuts_params(gp_mod_fit)
+mcmc_pairs(gp_mod_fit$draws(c("rho1", "alpha0", "alpha1", "alpha2")), np = np)
+mcmc_trace(gp_mod_fit$draws(c("alpha1", "rho1", "sigma"), inc_warmup = T), n_warmup = 500)
+
+ypred <- gp_mod_fit$draws("y2") %>%
+  as_draws_df() %>%
+  gather() %>%
+  mutate(x = (n0-1)+as.numeric(stringi::stri_extract(gsub("y2", "", key), regex = "\\d+"))) %>%
+  group_by(x) %>%
+  mutate(draw = 1:n()) %>%
+  ungroup() %>%
+  dplyr::select(-key) %>%
+  rename(y = value)
+
+ggplot() +
+  stat_lineribbon(data = ypred, mapping = aes(x = x, y = y)) +
+  scale_fill_brewer() +
+  geom_line(data = rbind(data, test_data), mapping = aes(x = x, y = log_inc), color = "red")
 ```
