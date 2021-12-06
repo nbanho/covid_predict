@@ -500,14 +500,12 @@ ggplot() +
 # prior
 sim_data <- list(T = 90,
                  x = 1:90,
-                 sig = 1,
-                 c0 = 45,
-                 alpha1 = .1,
-                 rho1 = 1,
-                 alpha2 = 0.2,
+                 alpha1 = 1,
+                 rho1 = 90,
+                 alpha2 = 0.5,
                  rho2 = 1,
-                 alpha3 = 10,
-                 rho3 = 90)
+                 alpha3 = 1,
+                 rho3 = 20)
 gp_prior <- stan(file='models/gp_prior.stan', data=sim_data,
                  warmup=0, iter=4000, chains=1, seed=494838,
                  algorithm="Fixed_param", refresh=4000)
@@ -527,14 +525,12 @@ library(bayesplot)
 
 # train data
 n0 <- 1
-n <- 30
+n <- 89
 data <- df %>%
   dplyr::filter(id == "DEU") %>%
   slice(n0:n) %>%
   mutate(x = n0:n) %>%
   mutate(log_inc = trans(new_confirmed, population, transfct = function(x) log(x + 1)))
-
-mean_li <- mean(data$log_inc)
 
 plot(data$log_inc)
 
@@ -585,4 +581,41 @@ ggplot() +
   stat_lineribbon(data = ypred, mapping = aes(x = x, y = y)) +
   scale_fill_brewer() +
   geom_line(data = rbind(data, test_data), mapping = aes(x = x, y = log_inc), color = "red")
+```
+
+### Toy example
+
+```{r}
+# train data
+n0 <- 1
+n <- 90
+data <- df %>%
+  dplyr::filter(id == "DEU") %>%
+  slice(n0:n) %>%
+  mutate(x = n0:n) %>%
+  mutate(log_inc = trans(new_confirmed, population, transfct = function(x) log(x + 1)))
+
+# test data
+test_data <- df %>%
+  dplyr::filter(id == "DEU") %>%
+  slice((n+1):(n+21)) %>%
+  mutate(x = (n+1):(n+21)) %>%
+  mutate(log_inc = trans(new_confirmed, population, transfct = function(x) log(x + 1)))
+
+# train model
+gp_fit <- train.gp(data$log_inc, n = 21, d = 1000, chains = 4, parallel_chains = 4, threads_per_chain = 2, seed = 12345)
+
+# predict
+pred <- predict.gp(gp_fit) %>%
+  data.frame() %>%
+  gather() %>%
+  rename(log_inc = value) %>%
+  mutate(draw = as.numeric(stringi::stri_extract(key, regex = "\\d+"))) %>%
+  mutate(x = n+rep(1:21, each = max(draw))) %>%
+  mutate(new_confirmed = inv_trans(log_inc, data$population[1]))
+
+ggplot(mapping = aes(x = x, y = new_confirmed)) +
+  stat_lineribbon(data = pred) +
+  scale_fill_brewer() +
+  geom_line(data = test_data, color = "red")
 ```

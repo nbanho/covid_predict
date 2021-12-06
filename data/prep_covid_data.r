@@ -1,11 +1,30 @@
+# libraries
 library(tidyverse)
 
+# load data
 dat <- read_csv("data/jhu_all_countries.csv")
 
+# subset data
+dat <- dat %>%
+  dplyr::select(id, date, population, confirmed)
+
+# start after n_cases cumulative confirmed cases
+n_cases = 10
 dat <- dat %>%
   group_by(id) %>%
-  dplyr::filter(confirmed >= 10) %>%
-  mutate_at(vars(vaccines, tests, confirmed, recovered, deaths, hosp, vent, icu), function(x) ifelse(is.na(x), 0, x)) %>%
+  dplyr::filter(confirmed >= n_cases)
+
+# set missing values to zero
+dat <- dat %>%
+  mutate(confirmed = ifelse(is.na(confirmed), 0, confirmed))
+
+# add missing dates
+dat <- dat %>%
+  complete(date = seq(min(date), max(date), by = "day")) %>%
+  tidyr::fill(confirmed, population, .direction = "down")
+
+# compute new confirmed
+dat <- dat %>%
   arrange(date) %>%
   mutate(new_confirmed_raw = dplyr::lead(confirmed) - confirmed) %>%
   slice(-n()) %>%

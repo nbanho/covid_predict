@@ -47,8 +47,8 @@ train.cori <- function(
 predict.cori <- function(
   estimate_R_obj, # train object from train.renewable_cori
   i = NULL, # R estimate to use for projection (default: NULL --> use latest)
-  n = 21, # number of days to project into the future
-  d = 4e3, # number of posterior draws
+  n = n_preds, # number of days to project into the future
+  d = n_draws, # number of posterior draws
   ... # additional parameters
   ) {
   

@@ -10,8 +10,7 @@ run_prediction <- function() {
   library(tidyverse)
   
   # utils
-  source("utils/predict.r")
-  source("utils/train.r")
+  source("utils/diagnostics.r")
   source("utils/transform.r")
   
   # models
@@ -19,6 +18,7 @@ run_prediction <- function() {
   source("models/epidemia.r")
   source("models/arima.r")
   source("models/prophet.r")
+  source("models/gp.r")
   
   # data (EU-27) - MLT - LUX - CYP + Uk + CHE
   df <- read_csv("data/prep_jhu_all_countries.csv") %>%
@@ -26,7 +26,7 @@ run_prediction <- function() {
                             "FIN", "FRA", "DEU", "GRC", "HUN", "IRL", "ITA", "LVA",
                             "LTU", "NLD", "POL", "PRT", "ROU", "SVK",
                             "SVN", "ESP", "SWE", "GBR")[id_idx[1]:id_idx[2]]) %>%
-    mutate(log_inc = trans(new_confirmed + 1, population, transfct = log)) 
+    mutate(log_inc = trans(new_confirmed + 1, population)) 
   countries <- unique(df$id)
   
   for (j in 1:length(countries)) {
@@ -47,11 +47,12 @@ run_prediction <- function() {
     if ("cori" %in% models) { test_df_ctry$cori <- list(NA) }
     if ("epidemia" %in% models) { test_df_ctry$epidemia <- list(NA) }
     if ("prophet" %in% models) { test_df_ctry$prophet <- list(NA) }
+    if ("gp" %in% models) { test_df_ctry$gp <- list(NA) }
     
     # for EpiEstim, get all R estimates right away
     if ("cori" %in% models) {
-      trained_cori <- train(df_ctry %>% rename(target = new_confirmed), method = "cori",
-                            n1 = cori.n1, n2 = cori.n2, seed = seed12345)
+      trained_cori <- train.cori(df_ctry$new_confirmed,
+                                 seed = seed12345)
     }
     
     # for prophet: set max cap a little bit above maximum observed incidence among all countries
@@ -77,9 +78,8 @@ run_prediction <- function() {
       # train and predict for each model
       if ("arima" %in% models) {
         # train
-        trained_arima <- train(train_df_ctry_last %>% rename(target = log_inc), 
-                               method = "arima", 
-                               iter = n_sample)
+        trained_arima <- train.arima(train_df_ctry_last$log_inc,
+                                     iter = n_sample)
         
         # diagnostics
         no_of_ar <- n_ar(trained_arima)
@@ -89,48 +89,58 @@ run_prediction <- function() {
         test_df_ctry$diagn_arima[[k]] <- list(no_of_ar, no_of_ma, max_Rhat, prop_div_trans)
         
         # predict
-        predicted_arima <- predict(trained_arima,
-                                   seed = seed12345)
+        predicted_arima <- predict.arima(trained_arima,
+                                         seed = seed12345)
         predicted_arima <- matrix(predicted_arima[1:max_n,1:n_draws], ncol = n_draws)
-        predicted_arima <- inv_trans(predicted_arima, test_df_ctry$population[1], transfct = exp)
+        predicted_arima <- inv_trans(predicted_arima, test_df_ctry$population[1])
         test_df_ctry$arima[[k]] <- predicted_arima
       } 
       
       if ("prophet" %in% models) {
         # train
-        trained_prophet <- train(train_df_ctry_last %>% rename(target = log_inc), 
-                                 method = "prophet", 
-                                 # cap = ctry_cap, 
-                                 mcmc.samples = n_sample, cores = n_chains,
-                                 seed = seed12345)
+        trained_prophet <- train.prophet(train_df_ctry_last %>% 
+                                           rename(y = log_inc, ds = date) %>%
+                                           dplyr::select(ds, y), 
+                                         # cap = ctry_cap, 
+                                         seed = seed12345,
+                                         mcmc.samples = n_sample, cores = n_chains)
         
         # predict
-        predicted_prophet <- predict(trained_prophet)
+        predicted_prophet <- predict.prophet(trained_prophet)
         predicted_prophet <- matrix(predicted_prophet[1:max_n,1:n_draws], ncol = n_draws)
-        predicted_prophet <- inv_trans(predicted_prophet, test_df_ctry$population[1], transfct = exp)
+        predicted_prophet <- inv_trans(predicted_prophet, test_df_ctry$population[1])
         test_df_ctry$prophet[[k]] <- predicted_prophet
       }
       
       if ("cori" %in% models) {
         # predict
-        predicted_cori <- predict(trained_cori, 
-                                  i = n_train+k-1,
-                                  seed = seed12345,
-                                  d = n_draws)
+        predicted_cori <- predict.cori(trained_cori, 
+                                       i = n_train+k-1,
+                                       seed = seed12345)
         test_df_ctry$cori[[k]] <- matrix(predicted_cori[1:max_n,1:n_draws], ncol = n_draws)
       }
       
       if ("epidemia" %in% models) {
         # train
-        trained_epidemia <- train(train_df_ctry %>% rename(target = new_confirmed),  
-                                  method = "epidemia",
-                                  iter = n_sample, cores = n_chains,
-                                  seed = seed12345)
+        trained_epidemia <- train.epidemia(train_df_ctry %>% mutate(cases = new_confirmed),
+                                           iter = n_sample, cores = n_chains,
+                                           seed = seed12345)
         
         # predict
-        predicted_epidemia <- predict(trained_epidemia)
+        predicted_epidemia <- predict.epidemia(trained_epidemia)
         predicted_epidemia <- matrix(predicted_epidemia[1:max_n,1:n_draws], ncol = n_draws)
         test_df_ctry$epidemia[[k]] <- predicted_epidemia
+      }
+      
+      if ("gp" %in% models) {
+        trained_gp <- train.gp(train_df_ctry_last$log_inc,
+                               seed = seed12345,
+                               chains = n_chains, parallel_chains = n_chains, threads_per_chain = n_chains / 2,
+                               iter = n_sample)
+        predicted_gp <- predict.gp(trained_gp)
+        predicted_gp <- matrix(predicted_gp[1:max_n,1:n_draws], ncol = n_draws)
+        predicted_gp <- inv_trans(predicted_gp, test_df_ctry$population[1])
+        test_df_ctry$gp[[k]] <- predicted_gp
       }
     }
     

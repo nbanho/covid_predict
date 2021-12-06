@@ -1,35 +1,3 @@
-# default settings
-source("settings/defaults.r")
-
-# predict target
-predict <- function(
-  train_obj, # training object
-  n = n_preds, # number of days to project into the future
-  d = n_draws, # number of posterior draws
-  ... # additional models-pecific parameters 
-  ) {
-  
-  if (class(train_obj)[1] == "estimate_R") {
-    
-    preds <- predict.cori(estimate_R_obj = train_obj, n = n, d = d, ...)
-    
-  } else if (class(train_obj)[1] == "epimodel") {
-    
-    preds <- predict.epidemia(epidemia_obj = train_obj, n = n, d = d, ...)
-    
-  } else if (class(train_obj)[1] == "varstan") {
-    
-    preds <- predict.arima(varstan_obj = train_obj, n = n, d = d, ...)
-    
-  } else if (class(train_obj)[1] == "prophet") {
-    
-    preds <- predict.prophet(prophet_obj = train_obj, n = n, d = d, ...)
-    
-  }
-  
-  return(preds)
-}
-
 # plot observed vs predicted target
 plot.predict <- function(
   date, # date

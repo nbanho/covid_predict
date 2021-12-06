@@ -29,7 +29,7 @@ train.prophet <- function(
 
 predict.prophet <- function(
   prophet_obj, # train object from train.prophet
-  n = 1, # number of days to project into the future
+  n = n_preds, # number of days to project into the future
   ... # additional parameters
 ) {
   

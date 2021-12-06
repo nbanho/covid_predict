@@ -1,5 +1,6 @@
 library(epidemia)
 library(rstanarm)
+library(lubridate)
 source("utils/delays.r")
 
 train.epidemia <- function(
@@ -7,9 +8,13 @@ train.epidemia <- function(
   ... # additional model parameters
 ) {
   
-  # Add week and set ascertment rate to 1
+  # Add week and set ascertainment rate o to 1
   data <- data %>%
-    mutate(o = 1, week = format(date, "%V"))
+    mutate(o = 1, 
+           week = week(date),
+           year = year(date)) %>%
+    mutate(year = year - min(year)) %>%
+    mutate(week = max(week) * year + week)
   
   # model the rep number as weekly random walk (no covariates)
   rt <- epirt(
