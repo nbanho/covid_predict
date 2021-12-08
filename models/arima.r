@@ -8,7 +8,7 @@ train.arima <- function(
   # note it is currently not possible to provide a seed to auto.sarima in the call to varstan
 ) {
   
-  fit <- auto.sarima(y, ...)  
+  fit <- stan_sarima(y, order = c(1,0,1), season = c(0,1,0), ...)  
     
   return(fit)
 }
