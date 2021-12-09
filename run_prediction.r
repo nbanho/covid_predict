@@ -26,7 +26,7 @@ run_prediction <- function() {
                             "FIN", "FRA", "DEU", "GRC", "HUN", "IRL", "ITA", "LVA",
                             "LTU", "NLD", "POL", "PRT", "ROU", "SVK",
                             "SVN", "ESP", "SWE", "GBR")[id_idx[1]:id_idx[2]]) %>%
-    mutate(log_inc = trans(new_confirmed + 1, population)) 
+    mutate(log_inc = trans(new_confirmed, population)) 
   countries <- unique(df$id)
   
   for (j in 1:length(countries)) {

@@ -6,7 +6,7 @@ library(tidybayes)
 read_files <- function(f) { do.call(rbind, map(f, readRDS)) }
 
 # determine maximum days ahead forecast
-get_max_N <- function(D) { D %>% rowwise() %>% mutate(max_N = ifelse(is.null(dim(arima)), 1, nrow(arima))) }
+get_max_N <- function(D, model = "arima") { D %>% rowwise() %>% mutate(max_N = ifelse(is.null(dim(!! sym(model))), 1, nrow(!! sym(model)))) }
 
 pred_score <- function(
   X, # predicted target
