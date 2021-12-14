@@ -28,7 +28,8 @@ train.prophet <- function(
   fit <- prophet(dsy, 
                  growth = gr,
                  changepoint.range = cpr, n.changepoints = nc, changepoint.prior.scale = 0.1,
-                 yearly.seasonality = F, weekly.seasonality = 'auto', daily.seasonality = F, seasonality.mode = "multiplicative")  
+                 yearly.seasonality = F, weekly.seasonality = 'auto', daily.seasonality = F, seasonality.mode = "multiplicative",
+                 ...)  
   
   return(fit)
 }
