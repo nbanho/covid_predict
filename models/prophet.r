@@ -19,9 +19,16 @@ train.prophet <- function(
     dsy$floor <- floor 
   }
    
+  # change points
+  n <- nrow(dsy)
+  cpr <- (n - 7) / n
+  nc <- n / 14
   
   # fit
-  fit <- prophet(dsy, growth = gr, yearly.seasonality = F, weekly.seasonality = F, daily.seasonality = F, ...)  
+  fit <- prophet(dsy, 
+                 growth = gr,
+                 changepoint.range = cpr, n.changepoints = nc, changepoint.prior.scale = 0.1,
+                 yearly.seasonality = F, weekly.seasonality = 'auto', daily.seasonality = F, seasonality.mode = "multiplicative")  
   
   return(fit)
 }
