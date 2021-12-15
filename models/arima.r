@@ -8,7 +8,7 @@ train.arima <- function(
   # note it is currently not possible to provide a seed to auto.sarima in the call to varstan
 ) {
   
-  fit <- auto.sarima(ts = ts(y, frequency = 7), max.p = 1, max.d = 2, max.q = 1, max.P = 0, max.Q = 1, max.D = 1, stepwise = F, seasonal = T, ...)
+  fit <- auto.sarima(ts = ts(y, frequency = 7), max.p = 1, max.d = 1, max.q = 1, max.P = 0, max.Q = 1, max.D = 1, stepwise = F, seasonal = T, ...)
     
   return(fit)
 }
