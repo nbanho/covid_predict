@@ -25,7 +25,7 @@ train.gp <- function(
   data_list$rho1_scale <- prior_par[prior_par[, 1]==n_data,3]
   
   # fit model
-  gp_mod <- cmdstan_model("models/gp.stan", cpp_options = list(stan_threads = T))
+  gp_mod <- cmdstan_model("models/gp_mult.stan", cpp_options = list(stan_threads = T))
   gp_mod_fit <- gp_mod$sample(
     data =  data_list,
     iter_sampling = d,
