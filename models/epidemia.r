@@ -31,7 +31,9 @@ train.epidemia <- function(
     pop_adjust = T,
     pops = "population",
     latent = TRUE,
-    prior_aux = rstanarm::normal(10,2)
+    prior_aux = rstanarm::normal(10,2),
+    seed_days = 6,
+    prior_seeds = rstanarm::exponential(0.03)
   )
   
   # model observed cases as a proportion of infections constant over time
