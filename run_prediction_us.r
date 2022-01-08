@@ -16,10 +16,6 @@ run_prediction_us <- function() {
   source("models/prophet.r")
   source("models/gp.r")
   
-  # data
-  train_df <- readRDS("data/us_state_train_cases_inc.rds")
-  test_df <- readRDS("data/us_state_test_cases_inc.rds")
-  
   # states
   states_all <- read.table("data/us-state/states.txt")$V1
   states_idx <- states_all[state_se[1]:state_se[2]]
