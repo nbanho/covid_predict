@@ -4,7 +4,8 @@ data {
   real<lower=0> alpha1;
   real<lower=0> rho1;
   real<lower=0> alpha2;
-  real<lower=0> rho2;
+  real<lower=0> rho2p;
+  real<lower=0> rho2e;
   real<lower=0> alpha3;
   real<lower=0> rho3;
 }
@@ -18,11 +19,11 @@ transformed data {
   for (i in 1:T) {
       K2[i,i] = alpha2^2 + 1e-10;
       for (j in (i + 1):T) {
-        K2[i,j] = (alpha2 ^ 2) * exp(-2*(sin(pi() * fabs(x[i] - x[j]) / 7) ^ 2) / (rho2 ^ 2));
+        K2[i,j] = (alpha2 ^ 2) * exp(-2*(sin(pi() * fabs(x[i] - x[j]) / 7) ^ 2) / (rho2p ^ 2)) * exp( - (x[i] - x[j]) ^ 2 / (2 * rho2e ^ 2));
         K2[j,i] = K2[i,j];
       }
     }
-  L = cholesky_decompose(K1 + K2 + K3 + diag_matrix(rep_vector(1e-10, T)));
+  L = cholesky_decompose(K2 + K3 + diag_matrix(rep_vector(1e-10, T)));
 }
 
 parameters { }

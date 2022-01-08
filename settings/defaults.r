@@ -23,3 +23,7 @@ n_chains <- 4
 
 # maximum expected incidence
 # prophet.max_inc <- 250 # 25% above the highest observed incidence per 1e5 pop. from BEL and ESP
+
+# transform
+trans <- function(x) log(x + 1)
+inv_trans <- function(y) exp(y) - 1

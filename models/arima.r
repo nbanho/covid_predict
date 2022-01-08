@@ -4,12 +4,17 @@ library(rstan)
 # Train ARIMA model
 train.arima <- function(
   y, # number of new confirmed cases
+  weekly = T, # consider weekly seasonal arima
   ... # additional parameters to auto.arima 
   # note it is currently not possible to provide a seed to auto.sarima in the call to varstan
 ) {
   
   #fit <- auto.sarima(ts = ts(y, frequency = 7), max.p = 1, max.d = 1, max.q = 1, max.P = 0, max.Q = 1, max.D = 1, stepwise = F, seasonal = T, ...)
-  fit <- stan_sarima(ts = ts(y, frequency = 7), order = c(1,0,1), seasonal = c(0,1,0), ...)
+  if (weekly) {
+    fit <- stan_sarima(ts = ts(y, frequency = 7), order = c(1,0,1), seasonal = c(0,1,0), ...)
+  } else {
+    fit <- stan_sarima(ts = ts(y, frequency = 1), order = c(1,0,1), seasonal = c(0,0,0), ...)
+  }
     
   return(fit)
 }

@@ -2,8 +2,9 @@ library(prophet)
 
 train.prophet <- function(
   dsy, # df with date column (ds) and time series (y) 
-  cap = NULL,
-  floor = NULL,
+  cap = NULL, # upper limit
+  floor = NULL, # lower limit
+  weekly = T, # consider weekly seasonality
   ... # additional model parameters
 ) {
   
@@ -25,11 +26,20 @@ train.prophet <- function(
   nc <- n / 14
   
   # fit
-  fit <- prophet(dsy, 
-                 growth = gr,
-                 changepoint.range = cpr, n.changepoints = nc, changepoint.prior.scale = 0.25,
-                 yearly.seasonality = F, weekly.seasonality = 'auto', daily.seasonality = F, seasonality.mode = "multiplicative",
-                 ...)  
+  if (weekly) {
+    fit <- prophet(dsy, 
+                   growth = gr,
+                   changepoint.range = cpr, n.changepoints = nc, changepoint.prior.scale = 0.25,
+                   yearly.seasonality = F, weekly.seasonality = 'auto', daily.seasonality = F, seasonality.mode = "multiplicative",
+                   ...)  
+  } else {
+    fit <- prophet(dsy, 
+                   growth = gr,
+                   changepoint.range = cpr, n.changepoints = nc, changepoint.prior.scale = 0.25,
+                   yearly.seasonality = F, weekly.seasonality = F, daily.seasonality = F,
+                   ...)  
+  }
+  
   
   return(fit)
 }

@@ -1,4 +1,5 @@
 library(scoringRules)
+library(pROC)
 library(tidybayes)
 
 
@@ -11,9 +12,15 @@ get_max_N <- function(D, model = "arima") { D %>% rowwise() %>% mutate(max_N = i
 pred_score <- function(
   X, # predicted target
   y = NULL, # observed target
+  pop = NULL,
   type = "crps", # type of score (default: continuous ranked probability score)
   ... # additional arguments to compute type of score
 ) {
+  
+  if (!is.null(pop)) {
+    X <- trans(X, pop)#, transfct = NULL)
+    y <- trans(y, pop)#, transfct = NULL)
+  }
   
   if(is.null(y)) {y <- rep(NA, nrow(X))}
   X <- data.frame(t(X))
@@ -35,12 +42,29 @@ pred_score <- function(
   } 
   else if (type == "critical") {
     scoring_fct <- function(y = NULL, x, q) { sum(x > q) / length(x) }
-  }
+  } 
   
   score <- mapply(scoring_fct, y, X, ...)
   
   return( list(score) )
   
+}
+
+
+hotspot_proba <- function(
+  X, # predicted target
+  y, # observed target
+  q # threshold probability
+) {
+  n <- nrow(X)
+  d <- ncol(X)
+  p <- numeric(length(n))
+  t <- numeric(length(n))
+  for (i in 1:(n-7)) {
+    p[i] <- sum((X[i+7, ] / X[i, ] - 1) > q) / d
+    t[i] <- ifelse((y[i+7] / y[i] - 1) > q, 1, 0)
+  }
+  return(list(data.frame(predicted_proba = p, hotspot = t)))
 }
 
 
@@ -102,23 +126,67 @@ plot_predict <- function(
 
 
 plot_score <- function(
-  dat, # the data frame with columns value, variable, and group
-  CrI = c(.5, .8, .95)
+  dat # the data frame with columns value, variable, and group
+  #CrI = c(.5, .8, .95)
 ) {
   
   pl <- dat %>%
-    ggplot(aes(y = variable, x = value)) +
-    stat_interval(.width = CrI) +
-    stat_pointinterval(.width = CrI, position = position_nudge(y = -0.2)) +
+    group_by(group, variable) %>%
+    summarize(m = median(value),
+              q1 = quantile(value, .25),
+              q3 = quantile(value, .75)) %>%
+    ungroup() %>%
+    ggplot(aes(x = variable)) +
+    geom_point(aes(y = m)) +
+    geom_errorbar(aes(ymin = q1, ymax = q3), width = .1) +
     facet_wrap(~ group) +
-    scale_color_brewer() +
-    labs(color = "CrI", fill = "CrI") +
-    theme_bw2() 
+    theme_bw2() +
+    theme(axis.title.x = element_blank())
+    
+  # pl <- dat %>%
+  #   ggplot(aes(y = variable, x = value)) +
+  #   stat_interval(.width = CrI) +
+  #   stat_pointinterval(.width = CrI, position = position_nudge(y = -0.2)) +
+  #   facet_wrap(~ group) +
+  #   scale_color_brewer() +
+  #   labs(color = "CrI", fill = "CrI") +
+  #   theme_bw2() 
   
   return(pl)
   
 }
 
+regret <- function(o, f, n, w, b = 0.5) {
+  e <- f - o
+  we <- w[n] * e
+  bwe <- ifelse(e < 0, (1+b) * we, (1-b) * we)
+  abwe <- abs(bwe)
+  return(abwe)
+}
+
+regret_score <- function(
+  X, # predicted target
+  y, # observed target
+  pop = NULL, # population
+  ... # additional arguments to function regret
+) {
+ 
+  if (!is.null(pop)) {
+    X <- trans(X, pop)#, transfct = NULL)
+    y <- trans(y, pop)#, transfct = NULL)
+  }
+  
+  n_days <- nrow(X)
+  
+  r <- numeric(n_days)
+  for (i in 1:n_days) {
+    r[i] <- mean(regret(X[i, ], y[i], n = i, ...))
+  }
+  
+  war <- sum(r)
+  
+  return(war)
+}
 
 is_peak <- function(
   x, # target

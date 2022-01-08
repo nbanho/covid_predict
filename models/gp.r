@@ -7,6 +7,7 @@ train.gp <- function(
   target, # number of new confirmed cases
   n = n_preds, # number of days to project into the future
   d = n_draws, # number of posterior draws
+  weekly = T, # consider weekday effects
   ... # additional parameters to cmdstanr::sample
 ) {
   
@@ -25,7 +26,8 @@ train.gp <- function(
   data_list$rho1_scale <- prior_par[prior_par[, 1]==n_data,3]
   
   # fit model
-  gp_mod <- cmdstan_model("models/gp_mult.stan", cpp_options = list(stan_threads = T))
+  model_file <- ifelse(weekly, "models/gp_week.stan", "models/gp.stan")
+  gp_mod <- cmdstan_model(model_file, cpp_options = list(stan_threads = T))
   gp_mod_fit <- gp_mod$sample(
     data =  data_list,
     iter_sampling = d,
