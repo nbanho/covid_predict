@@ -2,8 +2,8 @@ run_prediction_us <- function() {
   
   # settings
   args <- commandArgs(trailingOnly = TRUE)
-  state <- args[1]
-  models <- args[2:length(args)]
+  state_se <- as.numeric(args[1:2])
+  models <- args[3:length(args)]
   source("settings/defaults.r")
   
   # libraries 
@@ -22,11 +22,7 @@ run_prediction_us <- function() {
   
   # states
   states_all <- read.table("data/us-state/states.txt")$V1
-  if (state == "all") {
-    states_idx <- states_all
-  } else {
-    states_idx <- state
-  }
+  states_idx <- states_all[state_se[1]:state_se[2]]
   
   for (j in 1:length(states_idx)) {
     
