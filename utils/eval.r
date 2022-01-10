@@ -1,6 +1,7 @@
 library(scoringRules)
 library(pROC)
 library(tidybayes)
+library(covidcast)
 
 
 # read files
@@ -9,17 +10,50 @@ read_files <- function(f) { do.call(rbind, map(f, readRDS)) }
 # determine maximum days ahead forecast
 get_max_N <- function(D, model = "arima") { D %>% rowwise() %>% mutate(max_N = ifelse(is.null(dim(!! sym(model))), 1, nrow(!! sym(model)))) }
 
+# add n
+add_n_ahead <- function(D) {
+  D %>%
+    group_by_at(c("state_id", "forecast_date")) %>%
+    arrange(test_date) %>%
+    mutate(n = 1:n()) %>%
+    ungroup() 
+}
+
+# compute incidence
+cc <- county_census %>%
+  dplyr::filter(COUNTY == 0) %>%
+  mutate(state_id = tolower(fips_to_abbr(FIPS))) %>%
+  rename(pop = POPESTIMATE2019) %>%
+  dplyr::select(state_id, pop)
+
+comp_inc <- function(D, ..., pop = cc) {
+  D %>%
+    left_join(cc, by = "state_id") %>%
+    ungroup() %>%
+    mutate_at(vars(...), ~ . / pop * 1e5) 
+}
+
+
+# add prediction score
+add_pred_score <- function(DL, models = models, ...) {
+  DL %>%
+    lapply(., function(X) comp_inc(X, cori)) %>%
+    lapply(., function(X) cbind(dplyr::select(X, state_id, forecast_date, test_date, inc), 
+                                sapply(models, function(m) pred_score(X[[m]], X$inc, ...)))) %>%
+    do.call(rbind, .)
+}
+
 pred_score <- function(
   X, # predicted target
   y = NULL, # observed target
-  pop = NULL,
+  trans = NULL,
   type = "crps", # type of score (default: continuous ranked probability score)
   ... # additional arguments to compute type of score
 ) {
   
-  if (!is.null(pop)) {
-    X <- trans(X, pop)#, transfct = NULL)
-    y <- trans(y, pop)#, transfct = NULL)
+  if (!is.null(trans)) {
+    X <- trans(X)
+    y <- trans(y)
   }
   
   if(is.null(y)) {y <- rep(NA, nrow(X))}
@@ -126,32 +160,35 @@ plot_predict <- function(
 
 
 plot_score <- function(
-  dat # the data frame with columns value, variable, and group
-  #CrI = c(.5, .8, .95)
+  dat, # the data frame with columns value, variable, and group
+  models
 ) {
   
-  pl <- dat %>%
-    group_by(group, variable) %>%
-    summarize(m = median(value),
-              q1 = quantile(value, .25),
-              q3 = quantile(value, .75)) %>%
-    ungroup() %>%
-    ggplot(aes(x = variable)) +
-    geom_point(aes(y = m)) +
-    geom_errorbar(aes(ymin = q1, ymax = q3), width = .1) +
-    facet_wrap(~ group) +
-    theme_bw2() +
-    theme(axis.title.x = element_blank())
-    
-  # pl <- dat %>%
-  #   ggplot(aes(y = variable, x = value)) +
-  #   stat_interval(.width = CrI) +
-  #   stat_pointinterval(.width = CrI, position = position_nudge(y = -0.2)) +
-  #   facet_wrap(~ group) +
-  #   scale_color_brewer() +
-  #   labs(color = "CrI", fill = "CrI") +
-  #   theme_bw2() 
+  if ("group" %in% colnames(dat)) {
+    pl <- dat %>%
+      dplyr::select(c("state_id", "group", models)) %>%
+      gather("variable", "value", models) %>%    
+      group_by(state_id, group, variable) %>%
+      summarize(mean_score = mean(value)) %>%
+      ungroup() %>% 
+      ggplot(aes(x = variable, y = mean_score)) +
+      facet_wrap(~ group) +
+      geom_boxplot()
+  } else {
+    pl <- dat %>%
+      dplyr::select_at(c("state_id", models)) %>%
+      gather("variable", "value", models) %>%    
+      group_by(state_id, variable) %>%
+      summarize(mean_score = mean(value)) %>%
+      ungroup() %>% 
+      ggplot(aes(x = variable, y = mean_score)) 
+  }
   
+  pl <- pl +
+    geom_boxplot() +
+    geom_jitter(shape = 4, width = .1, height = 0, alpha = .8, color = "dodgerblue4") 
+    theme_bw2() 
+
   return(pl)
   
 }

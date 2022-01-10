@@ -16,6 +16,7 @@ library(reshape2)
 library(lubridate)
 library(grid)
 library(gridExtra)
+library(covidcast)
 
 # utils
 source("utils/eval.r")
@@ -23,40 +24,50 @@ source("utils/delays.r")
 
 # helper
 source("helper/plotting.r")
-
-# global parameters
-n_brks <- c(0, 7, 14, 21)
-n_lbs <- paste(c("1", "2", "3"), "-week(s) ahead forecast", sep = " ")
-inc_small_brks <- c(-Inf, 10, 20, 30, 40, 50, 60, 80, 100, 125, 150, Inf)
 ```
 
 ## Data
 
 ```{r}
+# files
 files <- list.files("predictions", pattern = ".rds", full.names = T)
+
+# models
+models <- c("arima", "prophet", "cori", "gp")
+
+# parameters
+# - model colors
+mcols <- RColorBrewer::brewer.pal(length(models), "Dark2")
+# - discretize forecast weeks
+n_brks <- c(0, 7, 14, 21)
+n_lbs <- paste(c("1", "2", "3"), "-week(s) ahead forecast", sep = " ")
+# - discretize incidence
+inc_small_brks <- c(-Inf, 10, 20, 30, 40, 50, 60, 80, 100, 125, 150, Inf)
+# - default ahead forecast to look at
+n_ahead <- 10
 ```
 
 
-## Plot predict
+## Plot forecast
+
+### By model and country
 
 ```{r}
 pdf(file = "results/ts_forecast.pdf", w = 21 / cm(1), h = 14 / cm(1))
 for (f in files) {
   ctry <- gsub(".rds", "", basename(f))
-  n_ahead <- 10
   print(
     read_files(f) %>%
-      get_max_N() %>%
-      dplyr::filter(max_N >= n_ahead) %>%
-      rowwise() %>%
-      mutate_at(vars(arima, cori, prophet), ~ list(.[n_ahead, ])) %>% 
-      mutate_at(vars(date, new_confirmed), ~ list(.[n_ahead])) %>% 
-      unnest(cols = c("date", "new_confirmed", "arima", "cori", "prophet")) %>%
-      mutate(target = new_confirmed / population * 1e5) %>%
-      mutate_at(vars(arima, cori, prophet), ~ . / population * 1e5) %>%
-      dplyr::select(date, target, arima, cori, prophet) %>%
-      reshape2::melt(c("date")) %>%
+      lapply(., function(X) X[n_ahead, ]) %>%
+      lapply(., function(X) mutate_at(X, vars(models), ~ list(c(.)))) %>%
+      do.call(rbind, .) %>%
+      unnest(cols = models) %>%
+      comp_inc(cori) %>%
+      rename(target = inc, date = test_date) %>%
+      dplyr::select(date, target, models) %>%
+      melt(c("date")) %>%
       plot_predict(interval = T) +
+      scale_y_continuous(limits = c(0, 300)) +
       labs(y = "Incidence (per 100,000 population)", 
            color = "CrI", fill = "CrI",
            title = ctry, 
@@ -65,16 +76,17 @@ for (f in files) {
   
   print(
     read_files(f) %>%
-      rowwise() %>%
-      mutate_at(vars(arima, cori, prophet), ~ list(apply(., 1, mean))) %>%
-      unnest(cols = c("date", "new_confirmed", "n", "arima", "cori", "prophet")) %>%
+      lapply(., function(X) mutate_at(X, vars(models), ~ apply(., 1, mean))) %>%
+      do.call(rbind, .) %>%
+      add_n_ahead() %>%
       dplyr::filter(n %in% c(1, 7, 14, 21)) %>%
       mutate(n = factor(as.character(n), levels = c("1", "7", "14", "21"))) %>%
-      mutate(target = new_confirmed / population * 1e5) %>%
-      mutate_at(vars(arima, cori, prophet), ~ . / population * 1e5) %>%
-      dplyr::select(id, date, target, n, arima, cori, prophet) %>%
-      reshape2::melt(c("id", "date", "n")) %>%
+      comp_inc(cori) %>%
+      rename(target = inc, date = test_date) %>%
+      dplyr::select(date, target, n, models) %>%
+      reshape2::melt(c("date", "n")) %>%
       plot_predict(interval = F) +
+      scale_y_continuous(limits = c(0, 300)) +
       labs(y = "Incidence (per 100,000 population)",
            color = "Number of days forecasted ahead",
            title = ctry, 
@@ -85,6 +97,44 @@ dev.off()
 ```
 
 
+### Average-7d by country
+
+```{r}
+mean10 <- do.call(rbind, lapply(files, function(f) {
+  read_files(f) %>%
+    lapply(., function(X) mutate_at(X, vars(models), ~ apply(., 1, mean))) %>%
+    do.call(rbind, .) %>%
+    add_n_ahead() %>%
+    dplyr::filter(n == n_ahead) %>%
+    comp_inc(cori) %>%
+    rename(target = inc, date = test_date, id = state_id) %>%
+    dplyr::select(id, date, target, models) %>%
+    melt(measure.vars = c("target", models)) %>%
+    group_by(id, variable) %>%
+    mutate(value = zoo::rollmean(value, k = 7, fill = NA, align = "right")) %>%
+    ungroup() %>%
+    na.omit()
+}))
+
+mean10_pl <- ggplot(mean10, mapping = aes(x = date, y = value, color = variable)) +
+  facet_wrap(~ id, ncol = 3) +
+  geom_line(alpha = .5) +
+  scale_color_manual(values = c("black", mcols)) +
+  scale_y_continuous(limits = c(0, 300), expand = c(0,0)) +
+  theme_bw2() +
+  theme(axis.title.x = element_blank(), legend.position = "top") +
+  labs(y = "Incidence (per 100,000 population)", 
+       color = "Model forecast",
+       title = "Mean forecast by model", 
+       subtitle = paste0("Mean Probabilistic ", n_ahead, "-day ahead forecast (color) for daily new cases (dark)")) 
+
+mean10_pl
+
+save_plot(mean10_pl, "results/ts_mean10.pdf", w = 21, h = 28)
+```
+
+
+
 ## Calibration
 
 ### Probabilistic
@@ -93,15 +143,16 @@ dev.off()
 df_pCalib <- do.call(rbind, map(files, function(f) {
   print(sprintf("Processing file %s", f))
   read_files(f) %>%
-    dplyr::select(id, population, new_confirmed, date, n, arima, prophet, cori) %>%
-    rowwise() %>%
-    mutate_at(vars(arima, cori, prophet), ~ pred_score(., y = new_confirmed, type = "calibration")) %>%
-    unnest(cols = c("n", "date", "new_confirmed", "arima", "cori", "prophet"))
+    lapply(., function(X) comp_inc(X, cori)) %>%
+    lapply(., function(X) cbind(dplyr::select(X, state_id, forecast_date, test_date, inc), 
+                                sapply(models, function(m) pred_score(X[[m]], X$inc, type = "calibration")))) %>%
+    do.call(rbind, .)
 }))
 
 pCalib_pl <- df_pCalib %>%
+  add_n_ahead() %>%
   mutate(n = cut(n, breaks = n_brks, labels = n_lbs)) %>%
-  dplyr::select(n, arima, cori, prophet) %>%
+  dplyr::select(n, models) %>%
   reshape2::melt("n") %>%
   ggplot(aes(x = value)) +
   facet_wrap(~ variable + n, ncol = 3) +
@@ -113,6 +164,8 @@ pCalib_pl <- df_pCalib %>%
        subtitle = "PIT histogram by method and weekly ahead forecast") +
   theme_bw2()
 
+pCalib_pl
+
 save_plot(pCalib_pl, "results/calibration_probabilistic.pdf", w = 21, h = 21)
 ```
 
@@ -121,18 +174,18 @@ save_plot(pCalib_pl, "results/calibration_probabilistic.pdf", w = 21, h = 21)
 
 ```{r}
 Gx <- df_pCalib %>%
-  group_by(id, date) %>% 
-  summarize(incidence = new_confirmed[1] / population * 1e5) %>%
+  group_by(state_id, test_date) %>% 
+  slice(1) %>%
   ungroup() %>%
-  group_by(id) %>%
-  mutate(Gx = ecdf(.$incidence)(incidence)) %>%
+  group_by(state_id) %>%
+  mutate(Gx = ecdf(.$inc)(inc)) %>%
   ungroup() 
 
 df_mCalib <- df_pCalib %>%
   left_join(Gx) %>%
-  mutate_at(vars(arima, cori, prophet), ~ . - Gx) %>%
+  mutate_at(vars(models), ~ . - Gx) %>%
   mutate(incidence = as.numeric(as.character(cut(incidence, breaks = inc_small_brks, labels = inc_small_brks[-1])))) %>%
-  dplyr::select(n, incidence, arima, cori, prophet) %>%
+  dplyr::select(n, incidence, models) %>%
   mutate(n = cut(n, breaks = n_brks, labels = n_lbs)) %>%
   reshape2::melt(c("n", "incidence")) %>%
   group_by(n, incidence, variable) %>%
@@ -165,20 +218,22 @@ save_plot(mCalib_pl, "results/calibration_marginal.pdf", w = 21, h = 10)
 df_sharp <- do.call(rbind, map(files, function(f) {
   print(sprintf("Processing file %s", f))
   read_files(f) %>%
-    dplyr::select(id, new_confirmed, date, n, arima, prophet, cori, population) %>%
-    rowwise() %>%
-    mutate_at(vars(arima, cori, prophet), list(Q50 = ~ pred_score(., new_confirmed / population * 1e5, type = "sharpness", q = 0.25))) %>%
-    mutate_at(vars(arima, cori, prophet), list(Q90 = ~ pred_score(., new_confirmed / population * 1e5, type = "sharpness", q = 0.05))) %>%
-    dplyr::select(-arima, -cori, -prophet) %>%
-    unnest(cols = c("n", "date", "new_confirmed", "arima_Q50", "cori_Q50", "prophet_Q50", "arima_Q90", "cori_Q90", "prophet_Q90"))
+    lapply(., function(X) comp_inc(X, cori)) %>%
+    lapply(., function(X) cbind(dplyr::select(X, state_id, forecast_date, test_date, inc), 
+                                sapply(models, function(m) pred_score(X[[m]], X$inc, type = "sharpness", q = .25)) %>% 
+                                  set_names(paste0(models, "_Q50")),
+                                sapply(models, function(m) pred_score(X[[m]], X$inc, type = "sharpness", q = .05)) %>% 
+                                  set_names(paste0(models, "_Q90")))) %>%
+    do.call(rbind, .)
 }))
 
 sharp_pl <- df_sharp %>%
+  add_n_ahead() %>%
   mutate(n = cut(n, breaks = n_brks, labels = n_lbs)) %>%
-  dplyr::select(-population, -new_confirmed) %>%
-  reshape2::melt(c("id", "n", "date")) %>%
+  dplyr::select(-forecast_date, -test_date, -inc) %>%
+  melt(c("state_id", "n")) %>%
   mutate(cri = factor(stringi::stri_extract(variable, regex = "Q\\d{2}"), levels = c("Q50", "Q90"))) %>%
-  mutate(variable = factor(gsub("_Q\\d{2}", "", variable), levels = c("arima", "cori", "prophet"))) %>%
+  mutate(variable = factor(gsub("_Q\\d{2}", "", variable), levels = models)) %>%
   ggplot(aes(x = cri, y = value)) +
   facet_wrap(~ variable + n, ncol = length(n_brks)-1) +
   geom_boxplot() +
@@ -187,6 +242,8 @@ sharp_pl <- df_sharp %>%
        title = "Sharpness",
        subtitle = "Size of Q%-credible interval by method and N-day ahead forecast") +
   theme_bw2()
+
+sharp_pl
 
 save_plot(sharp_pl, "results/sharpness.pdf", w = 21, h = 21)
 ```
@@ -197,32 +254,60 @@ save_plot(sharp_pl, "results/sharpness.pdf", w = 21, h = 21)
 ```{r}
 df_ps <- do.call(rbind, map(files, function(f) {
   print(sprintf("Processing file %s", f))
-  read_files(f) %>%
-    rowwise() %>%
-    mutate_at(vars(arima, cori, prophet), ~ pred_score(., new_confirmed, type = "crps")) %>%
-    unnest(cols = c("n", "date", "new_confirmed", "arima", "cori", "prophet"))
+  read_files(f) %>% add_pred_score(models = models, type = "crps")
 }))
-```
 
+crps_pl <- df_ps %>%
+  plot_score(models = models) +
+  labs(y = "Score", x = "Models",
+       title = "CRPS",
+       subtitle = "Boxplot of average country scores") +
+  theme_bw2()
+
+crps_pl
+
+save_plot(crps_pl, "results/crps.pdf", w = 21, h = 14)
+```
 
 ### By N
 
 ```{r}
 crps_by_n_pl <- df_ps %>%
-  mutate(group = cut(n, breaks = c(0, 5, 10, 15, 21), 
-                     labels = paste(c("short (0-5", "medium (6-10", "long (11-15", "very long (15-21"), " days) forecast", sep = " "))) %>%
-  dplyr::select(id, group, arima, cori, prophet) %>%
-  reshape2::melt(c("id", "group")) %>%
-  plot_score(x = "CRPS", y = "Method") +
-  labs(title = "Skill",
-       subtitle = "CRPS by method and length of forecast") +
+  add_n_ahead() %>%
+  mutate(group = cut(n, breaks = n_brks, labels = n_lbs)) %>%
+  plot_score(models = models) +
+  labs(y = "Score", x = "Model",
+       title = "CRPS",
+       subtitle = "Boxplot of average country scores by n-day ahead forecast") +
   theme_bw2()
+
+crps_by_n_pl
 
 save_plot(crps_by_n_pl, "results/crps_by_n.pdf", w = 21, h = 14)
 ```
 
+### Log
 
-## Weighted CRPS
+```{r}
+df_cens_ps <- do.call(rbind, map(files, function(f) {
+  print(sprintf("Processing file %s", f))
+  read_files(f) %>% add_pred_score(models = models, type = "crps", trans = function(x) {x[x>300] <- 300; return(x)})
+}))
+
+cens_crps_pl <- df_cens_ps %>%
+  plot_score(models = models) +
+  labs(y = "Score", x = "Models",
+       title = "Censored CRPS",
+       subtitle = "Boxplot of average country scores") +
+  theme_bw2()
+
+cens_crps_pl
+
+save_plot(cens_crps_pl, "results/censored_crps.pdf", w = 21, h = 14)
+```
+
+
+### Weighted
 
 ```{r}
 WM <- data_delay(30, T, p_in, mu = rnorm(1e4, 10.92, 0.94), sigma = rnorm(1e4, 5.41, 0.27))
@@ -234,134 +319,283 @@ w <- WM %>%
 
 plot(w, xlab = "Days ahead", ylab = "Weight", type = "b")
 
-df_ps_weighted <- df_ps %>%
-  rowwise() %>%
-  mutate_at(vars(arima, cori, prophet), ~ . * w[n]) 
+df_ps_weighted <- df_cens_ps %>%
+  add_n_ahead() %>%
+  mutate_at(vars(models), ~ . * w[n]) %>%
+  group_by(state_id, forecast_date) %>%
+  summarize_at(vars(models), ~ sum(.)) %>%
+  ungroup()
+
+crps_weighted_pl <- df_ps_weighted %>%
+  plot_score(models = models) +
+  theme_bw2() +
+  labs(y = "Score", x = "Model",
+       title = "Censored weighted CRPS",
+       subtitle = "Boxplot of average country scores") 
+  
+crps_weighted_pl
+
+save_plot(crps_weighted_pl, "results/weighted_crps.pdf", w = 21, h = 14)
+```
+
+### Asymmetry 
+
+```{r}
+bias_weight <- function(p) {
+  p <- p - 0.5
+  if (p <= 0) {
+    (1 - p) ^ 2
+  } else {
+    (1 + p) ^ 1
+  }
+}
+
+plot(x = seq(0, 1, .01), y = 1 * sapply(seq(0, 1, .01), bias_weight), type = "b")
+
+df_pb <- do.call(rbind, map(files, function(f) {
+  print(sprintf("Processing file %s", f))
+  read_files(f) %>% add_pred_score(models = models, type = "bias")
+}))
+
+df_cens_ps_pb <- df_cens_ps
+df_cens_ps_pb[ ,models] <- df_cens_ps_pb[ ,models] * apply(df_pb[ ,models], c(1,2), bias_weight)
+df_cens_ps_pb_weighted <- df_cens_ps_pb %>%
+  add_n_ahead() %>%
+  mutate_at(vars(models), ~ . * w[n]) %>%
+  group_by(state_id, forecast_date) %>%
+  summarize_at(vars(models), ~ sum(.)) %>%
+  ungroup()
+
+crps_asym_pl <- df_cens_ps_pb_weighted %>%
+  plot_score(models = models) +
+  labs(y = "Score", x = "Model",
+       title = "Censored weighted asymmetric CRPS",
+       subtitle = "Boxplot of average country scores") +
+  theme_bw2()
+
+crps_asym_pl
+
+save_plot(crps_asym_pl, "results/crps_weighted_asym.pdf", w = 21, h = 14)
+```
+
+```{r}
+all_crps_pl <- grid.arrange(crps_pl, cens_crps_pl, crps_weighted_pl, crps_asym_pl, ncol = 2)
+save_plot(all_crps_pl, "results/crps_comparison.pdf", w = 20, h = 20)
+```
+
+
+## Regret
+
+```{r}
+df_rr <- do.call(rbind, map(files, function(f) {
+  print(sprintf("Processing file %s", f))
+  read_files(f) %>%
+    rowwise() %>%
+    mutate_at(vars(models), ~ regret_score(., new_confirmed, pop = population[1], w = w, b = .5)) %>%
+    unnest(cols = c("n", "date", "new_confirmed", models))
+}))
+```
+
+### Overall
+
+```{r}
+regret_pl <- df_rr %>%
+  dplyr::select(id, models) %>%
+  reshape2::melt(c("id")) %>%
+  group_by(variable) %>%
+  summarize(m = median(value),
+            q1 = quantile(value, .25),
+            q3 = quantile(value, .75)) %>%
+  ungroup() %>%
+  ggplot(aes(x = variable)) +
+  geom_point(aes(y = m)) +
+  geom_errorbar(aes(ymin = q1, ymax = q3), width = .1) +
+  theme_bw2() +
+  theme(axis.title.x = element_blank()) +
+  labs(y = "Regret score (Median and IQR)", x = "",
+       title = "Regret",
+       subtitle = "Regret score by method and length of forecast") +
+  theme_bw2()
+
+regret_pl
+
+save_plot(regret_pl, "results/regret.pdf", w = 21, h = 14)
 ```
 
 ### By ID
 
 ```{r}
-weighted_crps_by_id_pl <- df_ps_weighted %>%
-  dplyr::select(id, arima, cori, prophet) %>%
-  reshape2::melt(c("id")) %>% 
-  rename(group = id) %>%
-  plot_score(x = "Weighted CRPS", y = "Method") +
-  labs(title = "Skill",
-       subtitle = "Weighted CRPS by country") +
-  theme_bw2()
+regret_by_id_pl <- df_rr %>%
+  dplyr::select(id, models) %>%
+  reshape2::melt(c("id")) %>%
+  group_by(id, variable) %>%
+  summarize(m = median(value)) %>%
+  ungroup() %>%
+  ggplot(aes(x = id, y = m, fill = variable)) +
+  geom_bar(stat = "identity", position = position_dodge()) +
+  scale_fill_manual(values = mcols) +
+  theme_bw2() +
+  theme(axis.title.x = element_blank(), legend.title = element_blank()) +
+  labs(y = "Regret score (Median)", x = "",
+       title = "Regret",
+       subtitle = "Regret score by method and country") 
+  
+regret_by_id_pl
 
-save_plot(weighted_crps_by_id_pl, "results/crps_weighted_by_id.pdf", w = 21, h = 21)
+save_plot(regret_by_id_pl, "results/regret_by_id.pdf", w = 21, h = 14)
 ```
+
 
 ### By incidence
 
 ```{r}
-weighted_crps_inc_pl <- df_ps_weighted %>%
-  mutate(incidence = new_confirmed / population * 1e5) %>%
+regret_by_inc_pl <- df_rr %>%
+  mutate(incidence = trans(new_confirmed, pop = population, transfct = NULL)) %>%
   mutate(group = cut(incidence, breaks = c(-Inf, 30, 50, 100, Inf), 
                      labels = paste(c("low", "medium", "high", "very high"), "incidence", sep = " "))) %>%
-  dplyr::select(id, group, arima, cori, prophet) %>%
+  dplyr::select(id, group, models) %>%
   reshape2::melt(c("id", "group")) %>%
-  plot_score(x = "Weighted CRPS", y = "Method") +
-  labs(title = "Skill",
-       subtitle = "Weighted CRPS by incidence (new cases per 100,000 people)") +
+  plot_score() +
+  labs(y = "CRPS (Median and IQR)", x = "",
+       title = "Skill",
+       subtitle = "CRPS by method and incidence") +
   theme_bw2()
 
-save_plot(weighted_crps_inc_pl, "results/crps_weighted_by_incidence.pdf", w = 21, h = 14)
+regret_by_inc_pl
+
+save_plot(regret_by_inc_pl, "results/regret_by_inc.pdf", w = 21, h = 14)
 ```
 
-
-
-## Policy metric
-
-### TPP and FPP
+## Hotspot 
 
 ```{r}
-df_crit <- do.call(rbind, map(files[1], function(f) {
+df_hot <- do.call(rbind, map(files, function(f) {
   print(sprintf("Processing file %s", f))
   read_files(f) %>%
-    dplyr::select(id, new_confirmed, date, n, arima, prophet, cori, population) %>%
-    rowwise() %>%
-    mutate_at(vars(arima, cori, prophet), list(Q25 = ~ pred_score(. / population * 1e5, type = "critical", q = 25))) %>%
-    mutate_at(vars(arima, cori, prophet), list(Q50 = ~ pred_score(./ population * 1e5, type = "critical", q = 50))) %>%
-    mutate_at(vars(arima, cori, prophet), list(Q75 = ~ pred_score(. / population * 1e5, type = "critical", q = 75))) %>%
-    mutate_at(vars(arima, cori, prophet), list(Q100 = ~ pred_score(. / population * 1e5, type = "critical", q = 100))) %>%
-    dplyr::select(-arima, -cori, -prophet) %>%
-    unnest(cols = c("n", "date", "new_confirmed", 
-                    "arima_Q25", "cori_Q25", "prophet_Q25", "arima_Q50", "cori_Q50", "prophet_Q50",
-                    "arima_Q75", "cori_Q75", "prophet_Q75", "arima_Q100", "cori_Q100", "prophet_Q100"))
+  get_max_N() %>%
+  dplyr::filter(max_N >= 8) %>%
+  rowwise() %>%
+  mutate_at(vars(models), ~ hotspot_proba(., new_confirmed, q = 0.25)) %>%
+  dplyr::select(id, n, models, max_N) %>%
+  mutate_at(vars(n), ~ list(.[1:(max_N-7)])) %>%
+  unnest(cols = c("n", models), names_sep = "_")
 }))
 
-df_crit_weight <- df_crit %>%
-  reshape2::melt(c("n", "id", "date", "new_confirmed", "population")) %>%
-  mutate(threshold = as.numeric(stringi::stri_extract(variable, regex = "\\d{2,3}"))) %>%
-  mutate(variable = gsub("_Q\\d{2,3}", "", variable)) %>%
-  mutate(value = value * w[n]) %>%
-  group_by(id, date, threshold, variable, new_confirmed, population) %>%
-  summarize(value = sum(value)) %>%
-  ungroup()
-
-# subset critical values
-df_crit_weight_sub <- df_crit_weight %>%
-  group_by(id, variable, threshold) %>%
-  arrange(date) %>%
-  mutate(is_crit = is_critical(new_confirmed / population * 1e5, threshold[1], min_x = 10)) %>%
+df_hot_pl <- df_hot %>%
+  rename(hotspot = cori_hotspot) %>%
+  dplyr::select(n, contains("proba"), hotspot) %>%
+  melt(c("n", "hotspot")) %>%
+  mutate(variable = gsub("_proba", "", variable)) %>%
+  group_by(n, variable) %>%
+  summarize(AUC = auc(hotspot, value)[1]) %>%
   ungroup() %>%
-  dplyr::filter(!is.na(is_crit))
+  ggplot(aes(x = n, y = AUC, color = variable, shape = variable)) +
+  geom_point() +
+  geom_line() +
+  geom_hline(aes(yintercept = 0.5), linetype = "dashed") +
+  scale_color_brewer(palette = "Dark2") +
+  scale_y_continuous(limits = c(.4, .7), breaks = seq(0, 1, .1), labels = function(x) x * 100) +
+  scale_x_continuous(breaks = seq(1,14)) +
+  labs(x = "Number of days forecasted ahead", 
+       y = "AUC for hotspot dates (%)", 
+       color = "Model", shape = "Model",
+       title = "Hotspot",
+       subtitle = "AUC for forecasting hotspots (25% weekly increase in incidence)") +
+  theme_bw2() +
+  theme(legend.position = "top")
+  
+df_hot_pl
 
-weighted_tpp_pl <- df_crit_weight_sub %>%
-  dplyr::filter(is_crit == "up") %>%
-  rename(group = threshold) %>%
-  plot_score() +
-  scale_x_continuous(limits = c(0, 1), expand = c(0,0), labels = function(x) x * 100) +
-  labs(x = "Weighted true positive probability (TPP)", 
-       y = "Method",
-       title = "Critical Incidence",
-       subtitle = "Weighted TPP by critical incidence") +
-  theme_bw2()
-
-weighted_tpp_pl
-
-
-weighted_fpp_pl <- df_crit_weight_sub %>%
-  dplyr::filter(is_crit == "down") %>%
-  rename(group = threshold) %>%
-  plot_score() +
-  scale_x_continuous(limits = c(0, 1), expand = c(0,0), labels = function(x) x * 100) +
-  labs(x = "Weighted false positive probability (%)", 
-       y = "Method",
-       title = "Critical incidence",
-       subtitle = "Weighted FPP by critical incidence") +
-  theme_bw2()
-
-weighted_fpp_pl
-
-df_crit_weight_f1 <- df_crit_weight_sub %>%
-  group_by(id, variable, is_crit, threshold) %>%
-  summarize(value = mean(value)) %>%
-  reshape2::dcast(id + variable + threshold ~ is_crit) %>%
-  mutate(f1 = up / (up + 0.5 * (down + (1-up))))
-
-weighted_f1_pl <- df_crit_weight_f1 %>%
-  rename(group = threshold, value = f1) %>%
-  plot_score() +
-  scale_x_continuous(limits = c(0, 1), expand = c(0,0), labels = function(x) x * 100) +
-  labs(x = "F1 (%)", 
-       y = "Method",
-       title = "Critical incidence",
-       subtitle = "Weighted F1-score by critical incidence",
-       caption = "Note: TPP and FPP are summarized by ID and then F1 is computed.") +
-  theme_bw2()
-
-weighted_f1_pl
-
-critical_pl <- arrangeGrob(weighted_tpp_pl, weighted_fpp_pl, weighted_f1_pl, ncol = 2)
-
-save_plot(critical_pl, "results/critical_incidence.pdf", w = 21, h = 18)
+save_plot(df_hot_pl, "results/hotspot.pdf", w = 21, h = 14)
 ```
 
-### Peak delay
+<!-- ### TPP and FPP -->
+
+<!-- ```{r} -->
+<!-- df_crit <- do.call(rbind, map(files[1], function(f) { -->
+<!--   print(sprintf("Processing file %s", f)) -->
+<!--   read_files(f) %>% -->
+<!--     dplyr::select(id, new_confirmed, date, n, arima, prophet, cori, population) %>% -->
+<!--     rowwise() %>% -->
+<!--     mutate_at(vars(arima, cori, prophet), list(Q25 = ~ pred_score(. / population * 1e5, type = "critical", q = 25))) %>% -->
+<!--     mutate_at(vars(arima, cori, prophet), list(Q50 = ~ pred_score(./ population * 1e5, type = "critical", q = 50))) %>% -->
+<!--     mutate_at(vars(arima, cori, prophet), list(Q75 = ~ pred_score(. / population * 1e5, type = "critical", q = 75))) %>% -->
+<!--     mutate_at(vars(arima, cori, prophet), list(Q100 = ~ pred_score(. / population * 1e5, type = "critical", q = 100))) %>% -->
+<!--     dplyr::select(-arima, -cori, -prophet) %>% -->
+<!--     unnest(cols = c("n", "date", "new_confirmed",  -->
+<!--                     "arima_Q25", "cori_Q25", "prophet_Q25", "arima_Q50", "cori_Q50", "prophet_Q50", -->
+<!--                     "arima_Q75", "cori_Q75", "prophet_Q75", "arima_Q100", "cori_Q100", "prophet_Q100")) -->
+<!-- })) -->
+
+<!-- df_crit_weight <- df_crit %>% -->
+<!--   reshape2::melt(c("n", "id", "date", "new_confirmed", "population")) %>% -->
+<!--   mutate(threshold = as.numeric(stringi::stri_extract(variable, regex = "\\d{2,3}"))) %>% -->
+<!--   mutate(variable = gsub("_Q\\d{2,3}", "", variable)) %>% -->
+<!--   mutate(value = value * w[n]) %>% -->
+<!--   group_by(id, date, threshold, variable, new_confirmed, population) %>% -->
+<!--   summarize(value = sum(value)) %>% -->
+<!--   ungroup() -->
+
+<!-- # subset critical values -->
+<!-- df_crit_weight_sub <- df_crit_weight %>% -->
+<!--   group_by(id, variable, threshold) %>% -->
+<!--   arrange(date) %>% -->
+<!--   mutate(is_crit = is_critical(new_confirmed / population * 1e5, threshold[1], min_x = 10)) %>% -->
+<!--   ungroup() %>% -->
+<!--   dplyr::filter(!is.na(is_crit)) -->
+
+<!-- weighted_tpp_pl <- df_crit_weight_sub %>% -->
+<!--   dplyr::filter(is_crit == "up") %>% -->
+<!--   rename(group = threshold) %>% -->
+<!--   plot_score() + -->
+<!--   scale_x_continuous(limits = c(0, 1), expand = c(0,0), labels = function(x) x * 100) + -->
+<!--   labs(x = "Weighted true positive probability (TPP)",  -->
+<!--        y = "Method", -->
+<!--        title = "Critical Incidence", -->
+<!--        subtitle = "Weighted TPP by critical incidence") + -->
+<!--   theme_bw2() -->
+
+<!-- weighted_tpp_pl -->
+
+
+<!-- weighted_fpp_pl <- df_crit_weight_sub %>% -->
+<!--   dplyr::filter(is_crit == "down") %>% -->
+<!--   rename(group = threshold) %>% -->
+<!--   plot_score() + -->
+<!--   scale_x_continuous(limits = c(0, 1), expand = c(0,0), labels = function(x) x * 100) + -->
+<!--   labs(x = "Weighted false positive probability (%)",  -->
+<!--        y = "Method", -->
+<!--        title = "Critical incidence", -->
+<!--        subtitle = "Weighted FPP by critical incidence") + -->
+<!--   theme_bw2() -->
+
+<!-- weighted_fpp_pl -->
+
+<!-- df_crit_weight_f1 <- df_crit_weight_sub %>% -->
+<!--   group_by(id, variable, is_crit, threshold) %>% -->
+<!--   summarize(value = mean(value)) %>% -->
+<!--   reshape2::dcast(id + variable + threshold ~ is_crit) %>% -->
+<!--   mutate(f1 = up / (up + 0.5 * (down + (1-up)))) -->
+
+<!-- weighted_f1_pl <- df_crit_weight_f1 %>% -->
+<!--   rename(group = threshold, value = f1) %>% -->
+<!--   plot_score() + -->
+<!--   scale_x_continuous(limits = c(0, 1), expand = c(0,0), labels = function(x) x * 100) + -->
+<!--   labs(x = "F1 (%)",  -->
+<!--        y = "Method", -->
+<!--        title = "Critical incidence", -->
+<!--        subtitle = "Weighted F1-score by critical incidence", -->
+<!--        caption = "Note: TPP and FPP are summarized by ID and then F1 is computed.") + -->
+<!--   theme_bw2() -->
+
+<!-- weighted_f1_pl -->
+
+<!-- critical_pl <- arrangeGrob(weighted_tpp_pl, weighted_fpp_pl, weighted_f1_pl, ncol = 2) -->
+
+<!-- save_plot(critical_pl, "results/critical_incidence.pdf", w = 21, h = 18) -->
+<!-- ``` -->
+
+## Peak delay
 
 ```{r}
 df_peak <- do.call(rbind, map(files, function(f) {
