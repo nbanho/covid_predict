@@ -1,0 +1,72 @@
+state,epidemic_phase,date
+AZ,subexponential growth,2020-03-15
+AZ,exponential growth,2020-05-26
+AZ,subexponential growth,2020-06-23
+AZ,subexponential decline,2020-07-06
+AZ,exponential decline,2020-07-31
+AZ,subexponential decline,2020-08-09
+AZ,plateau,2020-09-01
+AZ,subexponential growth,2020-10-04
+AZ,exponential growth,2020-11-04
+AZ,subexponential decline,2020-12-14
+AZ,exponential growth,2020-12-30
+AZ,exponential decline,2021-01-12
+AZ,subexponential decline,2021-01-20
+AZ,exponential decline,2021-01-27
+AZ,subexponential decline,2021-02-16
+CA,subexponential growth,2020-03-15
+CA,subexponential decline,2020-07-24
+CA,plateau,2020-09-11
+CA,subexponential growth,2020-10-20
+CA,exponential growth,2020-11-01
+CA,exponential decline,2020-12-21
+CA,subexponential growth,2020-12-30
+CA,exponential decline,2021-01-12
+CA,subexponential decline,2021-02-22
+IL,subexponential growth,2020-03-15
+IL,subexponential decline,2020-05-04
+IL,subexponential growth,2020-06-23
+IL,plateau,2020-08-23
+IL,exponential growth,2020-10-06
+IL,subexponential decline,2020-11-13
+IL,exponential decline,2020-11-22
+IL,subexponential growth,2020-11-30
+IL,exponential decline,2020-12-07
+IL,exponential growth,2021-01-01
+IL,exponential decline,2021-01-08
+IL,exponential growth,2021-01-01
+IL,subexponential decline,2021-02-19
+MD,subexponential growth,2020-03-15
+MD,subexponential decline,2020-05-07
+MD,subexponential growth,2020-07-03
+MD,subexponential decline,2020-07-31
+MD,plateau,2020-08-24
+MD,subexponential growth,2020-10-02
+MD,exponential growth,2020-10-26
+MD,subexponential growth,2020-11-22
+MD,subexponential decline,2020-12-10
+MD,exponential growth,2020-12-29
+MD,exponential decline,2021-01-12
+MD,plateau,2021-02-22
+NJ,exponential growth,2020-03-15
+NJ,plateau,2020-04-07
+NJ,exponential decline,2020-04-26
+NJ,subexponential decline,2020-05-16
+NJ,plateau,2020-06-18
+NJ,subexponential growth,2020-09-24
+NJ,exponential growth,2020-10-07
+NJ,subexponential growth,2020-11-20
+NJ,subexponential decline,2020-12-09
+NJ,subexponential growth,2020-12-30
+NJ,subexponential decline,2021-01-15
+NJ,subexponential growth,2021-02-25
+NY,exponential growth,2020-03-15
+NY,exponential decline,2020-04-10
+NY,subexponential decline,2020-05-14
+NY,plateau,2020-06-15
+NY,subexponential growth,2020-09-25
+NY,exponential growth,2020-11-10
+NY,subexponential growth,2020-12-08
+NY,exponential growth,2020-12-28
+NY,exponential decline,2021-01-12
+NY,subexponential decline,2021-02-05
