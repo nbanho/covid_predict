@@ -107,8 +107,12 @@ run_prediction <- function() {
         
         # predict
         predicted_prophet <- predict.prophet(trained_prophet)
+        
         predicted_prophet <- matrix(predicted_prophet[1:max_n,1:n_draws], ncol = n_draws)
         predicted_prophet <- inv_trans(predicted_prophet, test_df_ctry$population[1])
+        if (any(apply(predicted_prophet, 1, quantile, probs = .8)) >= 1e4) {
+          stop()
+        }
         test_df_ctry$prophet[[k]] <- predicted_prophet
       }
       

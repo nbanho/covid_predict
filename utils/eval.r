@@ -85,21 +85,28 @@ pred_score <- function(
 }
 
 
-hotspot_proba <- function(
-  X, # predicted target
-  y, # observed target
-  q # threshold probability
-) {
+is_hotspot <- function(y, q = .25, min_inc = 10) {
+  n <- length(y)
+  h <- numeric(n-7)
+  for (i in 1:(n-7)) {
+    if (y[i+7] < min_inc) {
+      h[i] <- NA
+    } else {
+      h[i] <- ifelse(y[i+7] / y[i] - 1 > q, 1, 0)
+    }
+  }
+  return(h)
+}
+
+p_hotspot <- function(X, q = .25) {
   n <- nrow(X)
   d <- ncol(X)
-  p <- numeric(length(n))
-  t <- numeric(length(n))
+  p <- numeric(n-7)
   for (i in 1:(n-7)) {
     p[i] <- sum((X[i+7, ] / X[i, ] - 1) > q) / d
-    t[i] <- ifelse((y[i+7] / y[i] - 1) > q, 1, 0)
   }
-  return(list(data.frame(predicted_proba = p, hotspot = t)))
-}
+  return(p)
+} 
 
 
 plot_predict <- function(
@@ -161,19 +168,20 @@ plot_predict <- function(
 
 plot_score <- function(
   dat, # the data frame with columns value, variable, and group
-  models
+  models, # model names
+  model_colors # color for models
 ) {
   
   if ("group" %in% colnames(dat)) {
     pl <- dat %>%
       dplyr::select(c("state_id", "group", models)) %>%
-      gather("variable", "value", models) %>%    
+      gather("variable", "value", models) %>%   
       group_by(state_id, group, variable) %>%
       summarize(mean_score = mean(value)) %>%
       ungroup() %>% 
-      ggplot(aes(x = variable, y = mean_score)) +
+      mutate(variable = factor(variable, levels = models)) %>%
+      ggplot(aes(x = variable, y = mean_score, color = variable)) +
       facet_wrap(~ group) +
-      geom_boxplot()
   } else {
     pl <- dat %>%
       dplyr::select_at(c("state_id", models)) %>%
@@ -181,49 +189,51 @@ plot_score <- function(
       group_by(state_id, variable) %>%
       summarize(mean_score = mean(value)) %>%
       ungroup() %>% 
-      ggplot(aes(x = variable, y = mean_score)) 
+      mutate(variable = factor(variable, levels = models)) %>%
+      ggplot(aes(x = variable, y = mean_score, color = variable)) 
   }
   
   pl <- pl +
     geom_boxplot() +
-    geom_jitter(shape = 4, width = .1, height = 0, alpha = .8, color = "dodgerblue4") 
+    geom_jitter(shape = 4, width = .1, height = 0, alpha = .66) +
+    scale_color_manual(values = model_colors) +
     theme_bw2() 
 
   return(pl)
   
 }
 
-regret <- function(o, f, n, w, b = 0.5) {
-  e <- f - o
-  we <- w[n] * e
-  bwe <- ifelse(e < 0, (1+b) * we, (1-b) * we)
-  abwe <- abs(bwe)
-  return(abwe)
-}
-
-regret_score <- function(
-  X, # predicted target
-  y, # observed target
-  pop = NULL, # population
-  ... # additional arguments to function regret
-) {
- 
-  if (!is.null(pop)) {
-    X <- trans(X, pop)#, transfct = NULL)
-    y <- trans(y, pop)#, transfct = NULL)
-  }
-  
-  n_days <- nrow(X)
-  
-  r <- numeric(n_days)
-  for (i in 1:n_days) {
-    r[i] <- mean(regret(X[i, ], y[i], n = i, ...))
-  }
-  
-  war <- sum(r)
-  
-  return(war)
-}
+# regret <- function(o, f, n, w, b = 0.5) {
+#   e <- f - o
+#   we <- w[n] * e
+#   bwe <- ifelse(e < 0, (1+b) * we, (1-b) * we)
+#   abwe <- abs(bwe)
+#   return(abwe)
+# }
+# 
+# regret_score <- function(
+#   X, # predicted target
+#   y, # observed target
+#   pop = NULL, # population
+#   ... # additional arguments to function regret
+# ) {
+#  
+#   if (!is.null(pop)) {
+#     X <- trans(X, pop)#, transfct = NULL)
+#     y <- trans(y, pop)#, transfct = NULL)
+#   }
+#   
+#   n_days <- nrow(X)
+#   
+#   r <- numeric(n_days)
+#   for (i in 1:n_days) {
+#     r[i] <- mean(regret(X[i, ], y[i], n = i, ...))
+#   }
+#   
+#   war <- sum(r)
+#   
+#   return(war)
+# }
 
 is_peak <- function(
   x, # target

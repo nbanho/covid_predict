@@ -19,9 +19,8 @@ library(lubridate)
 source("settings/defaults.r")
 
 # train and predict utils
-source("utils/train.r")
-source("utils/predict.r")
 source("utils/transform.r")
+source("utils/diagnostics.r")
 
 # delays
 source("utils/delays.r")
@@ -30,12 +29,21 @@ source("utils/delays.r")
 source("models/cori.r")
 source("utils/predict.r")
 
+# EpiNow2
+library(EpiNow2)
+
 # Epidemia
 source("models/epidemia.r")
 
 # ARIMA
 source("models/arima.r")
 library(astsa)
+
+# GP
+source("models/gp.r")
+library(cmdstanr)
+library(posterior)
+library(bayesplot)
 
 # Prophet
 source("models/prophet.r")
@@ -207,23 +215,72 @@ ggplot() +
 ```
 
 
+## EpiNow2
+
+### Under the hood
+
+```{r}
+# data
+df_deu <- df %>%
+  dplyr::filter(id == "DEU") %>%
+  arrange(date) %>%
+  rename(confirm = new_confirmed) %>%
+  dplyr::select(date, confirm)
+
+# train data
+train_df <- df_deu[201:260, ]
+plot(train_df$confirm, type = "l")
+
+# delay distributions
+reporting_delay <- list(
+  mean = convert_to_logmean(2, 1), mean_sd = 0.1,
+  sd = convert_to_logsd(2, 1), sd_sd = 0.1,
+  max = 10
+)
+generation_time <- get_generation_time(disease = "SARS-CoV-2", source = "ganyani")
+incubation_period <- get_incubation_period(disease = "SARS-CoV-2", source = "lauer")
+
+# estimate R
+estimates <- epinow(reported_cases = train_df,
+                    generation_time = generation_time,
+                    delays = delay_opts(incubation_period, reporting_delay),
+                    rt = rt_opts(prior = list(mean = 2, sd = 1), 
+                                 rw = 7,
+                                 use_breakpoints = F),
+                    stan = stan_opts(cores = 4),
+                    horizon = 21,
+                    output = "samples")
+
+plot(estimates)
+```
+
+
 ## Epidemia
 
 ### Under the hood
 
 ```{r}
-data <- df %>%
-  dplyr::filter(id == "AUT") %>%
-  arrange(date) %>%
-  slice(1:90) %>%
-  mutate(o = 1,
-         week = format(date, "%V"))
+df_deu <- df %>%
+  dplyr::filter(id == "DEU") %>%
+  arrange(date) 
+
+n0 <- 50
+n <- 140
+data <- df_deu %>%
+  slice(n0:(n0+n-1)) %>%
+  mutate(o = 1, 
+           week = week(date),
+           year = year(date)) %>%
+    mutate(year = year - min(year)) %>%
+    mutate(week = max(week) * year + week)
+
+plot(data$new_confirmed)
 
 # model the rep number as weekly random walk (no covariates)
 rt <- epirt(
   formula = R(id, date) ~ 1 + rw(time = week, prior_scale = 0.1),
   prior_intercept = rstanarm::normal(log(3), 0.3), 
-  link = 'log'
+  link = scaled_logit(K = 6)
 )
 
 # model infections with serial interval for generation time distribution
@@ -234,7 +291,9 @@ inf <- epiinf(
   pop_adjust = T,
   pops = "population",
   latent = TRUE,
-  prior_aux = rstanarm::normal(10,2)
+  prior_aux = rstanarm::normal(10,2),
+  seed_days = 10,
+  prior_seeds = rstanarm::normal(3e3, 1)
 )
 
 # model observed cases as a proportion of infections constant over time
@@ -253,11 +312,14 @@ fit <- do.call(epim, args)
 
 # predict
 test_data <- df %>%
-  dplyr::filter(id == "AUT") %>%
+  dplyr::filter(id == "DEU") %>%
   arrange(date) %>%
-  slice(91:111) %>%
-  mutate(o = 1,
-         week = format(date, "%V"))
+  slice((n0+n):(n0+n+21)) %>%
+  mutate(o = 1, 
+           week = week(date),
+           year = year(date)) %>%
+    mutate(year = year - min(year)) %>%
+    mutate(week = max(week) * year + week)
 
 pred <- posterior_predict(fit, newdata = test_data)
 pred_data <- cbind(date = pred$time, data.frame(t(pred$draws))) %>%
@@ -277,67 +339,101 @@ pred <- predict.epidemia(fit, d = 100)
 ```
 
 
-### Train & Pred
-
-```{r}
-results_ep <- list()
-
-for (j in 1:length(countries)) {
-  
-  # data
-  ctry <- countries[j]
-  df_ctry <- subset(df, id == ctry) 
-  
-  # test data
-  test_df_ctry <- slice(df_ctry, (n_train+1):nrow(df_ctry))
-  
-  # predictions
-  pred_mat <- matrix(NA, ncol = n_preds, nrow = nrow(test_df_ctry))
-  for (k in 1:nrow(test_df_ctry)) {
-    train_df_ctry <- slice(df_ctry, 1:(n_train+k-1))
-    trained_model <- train(dat = train_df_ctry %>% rename(target = new_confirmed), 
-                           method = "epidemia", 
-                           chains = 4, cores = 4, iter = 1000)
-    preds <- predict(trained_model, d = 1000)
-    mean_preds <- rowMeans(preds)
-    pred_mat[i, ] <- mean_preds
-  }
-  
-  # combine
-  pred_df <- data.frame(pred_mat) %>%
-    set_names(paste0("pred_ahead_", 1:n_preds)) %>%
-    mutate(id = ctry,
-           date = test_df_ctry$date) %>%
-    reshape2::melt(c("id", "date"))  %>%
-    rename(n_ahead = variable) %>%
-    mutate(n_ahead = as.numeric(stringi::stri_extract(n_ahead, regex = "\\d{1,2}"))) %>%
-    mutate(date = date %m+% days(n_ahead))
-  write_csv(pred_df, paste0("predictions/epidemia/", ctry, ".csv"))
-  results_ep[[j]] <- pred_df
-}
-
-results_ep_df <- do.call(rbind, results_ep)
-results_ep_df <- left_join(results_ep_df, dplyr::select(df, id, date, new_confirmed))
-```
-
-
-### Evaluation
-
-```{r}
-ggplot() +
-  geom_line(data = results_ep_df, mapping = aes(x = date, y = value, color = n_ahead)) +
-  geom_line(data = subset(results_ep_df, n_ahead == 1), mapping = aes(x = date, y = new_confirmed), color = "black") +
-  facet_wrap(~ id) +
-  scale_color_viridis_c() +
-  labs(y = "Number of new cases", color = "N") +
-  theme_bw() +
-  theme(axis.title.x = element_blank())
-```
-
-
 ## ARIMA
 
-### Toy example
+### Under the hood
+
+```{r}
+# train data
+n0 <- 1
+n <- 45
+data <- df %>%
+  dplyr::filter(id == "DEU") %>%
+  slice(n0:n) %>%
+  mutate(x = n0:n) %>%
+  mutate(log_inc = trans(new_confirmed, population)) %>%
+  mutate(inc = trans(new_confirmed, population, transfct = NULL)) %>%
+  mutate(log_inc_7 = log_inc - dplyr::lag(log_inc, 7)) 
+
+# stan data
+sdl <- list(N = n-n0 + 1 - 7,
+            y = data$log_inc_7[!is.na(data$log_inc_7)],
+            n_ahead = 21)
+
+# model
+aa <- auto.sarima(ts(data$log_inc, frequency = 7), max.p = 1, max.d = 2, max.q = 1, max.P = 0, max.Q = 1, max.D = 1, stepwise = F, seasonal = T)
+
+# mod <- cmdstan_model("models/arima.stan")
+# fit <- mod$sample(data = sdl)
+# fit$summary(c("mu", "phi", "theta"))
+# 
+# yhat <- fit %>%
+#   spread_draws(nu[x]) %>%
+#   rename(log_inc_7 = nu) %>%
+#   mutate(x = n0-1+x+7) %>%
+#   mutate(log_inc = log_inc_7 + data$log_inc[x-7-n0+1]) %>%
+#   mutate(new_confirmed = inv_trans(log_inc, pop = data$population[1])) %>%
+#   mutate(inc = trans(new_confirmed, pop = data$population[1], transfct = NULL))
+# 
+# 
+# ggplot(mapping = aes(x = x, y = inc)) +
+#   stat_lineribbon(data = yhat) +
+#   geom_line(data = data, color = "red") +
+#   scale_fill_brewer()
+# 
+# # test data
+# test_data <- df %>%
+#   dplyr::filter(id == "DEU") %>%
+#   slice((n+1):(n+21)) %>%
+#   mutate(x = 1:21) %>%
+#   mutate(log_inc = trans(new_confirmed, population),
+#          inc = trans(new_confirmed, population, transfct = NULL))
+# 
+# # predict function
+# pred.arima <- function(y, fit) {
+#   phi <- fit$draws("phi") %>% as_draws_matrix() %>% c
+#   theta <- fit$draws("theta") %>% as_draws_matrix() %>% c
+#   mu <- fit$draws("mu") %>% as_draws_matrix() %>% c
+#   sigma <- fit$draws("sigma") %>% as_draws_matrix() %>% c
+#   y_pred <- matrix(NA, nrow = 21, ncol = 500)
+#   for (d in 1:500) {
+#     mod <- arima(data$log_inc, order = c(1,0,1), seasonal = c(0,1,0), fixed = c(phi[d], theta[d]), include.mean = F)
+#     y_pred[ ,d] <- as.numeric(predict(mod, n.ahead = 21)$pred)
+#     for (t in 1:21) {
+#       y_pred[t,d] = rnorm(n = 1, mean = y_pred[t,d] + mu[d], sd = sigma[d])
+#     }
+#   }
+#   return(y_pred)
+# }
+# 
+# pred_data <- pred.arima(data$log_inc, fit) %>%
+#   data.frame() %>%
+#   add_rownames() %>%
+#   rename(x = rowname) %>%
+#   mutate(x = as.numeric(x)) %>%
+#   reshape2::melt(id.vars = "x") %>%
+#   rename(log_inc = value) %>%
+#   mutate(new_confirmed = inv_trans(log_inc, data$population[1])) %>%
+#   mutate(inc = trans(new_confirmed, pop = data$population[1], transfct = NULL))
+
+pred_data <- predict.arima(aa, n = 21, d = 1e3) %>%
+  t() %>%
+  data.frame() %>%
+  gather() %>%
+  mutate(x = as.numeric(stringi::stri_extract(key, regex = "\\d+"))) %>%
+  rename(log_inc = value) %>%
+  mutate(new_confirmed = inv_trans(log_inc, data$population[1])) %>%
+  mutate(inc = trans(new_confirmed, pop = data$population[1], transfct = NULL))
+
+# evaluate
+ggplot(mapping = aes(x = x, y = inc)) +
+  stat_lineribbon(data = pred_data) +
+  geom_line(data = test_data, col = "red") +
+  scale_fill_brewer()
+
+```
+
+### Test functions
 
 ```{r}
 # toy model
@@ -353,68 +449,42 @@ deu_first221 <- df %>%
 plot.predict(deu_first221$date, deu_first221$new_confirmed, deu_pred)
 ```
 
-### Train & Pred
-
-```{r}
-results_am <- list()
-
-for (j in 1:length(countries)) {
-  
-  # data
-  ctry <- countries[j]
-  df_ctry <- subset(df, id == ctry) 
-  
-  # test data
-  test_df_ctry <- slice(df_ctry, (n_train+1):nrow(df_ctry))
-  
-  # predictions
-  pred_mat <- matrix(NA, ncol = n_preds, nrow = nrow(test_df_ctry))
-  for (k in 1:nrow(test_df_ctry)) {
-    train_df_ctry <- slice(df_ctry, tail(1:(n_train+k-1), 90))
-    # train_df_ctry <- slice(df_ctry, 1:(n_train+k-1))
-    train_df_ctry$log_inc <- log((train_df_ctry$new_confirmed+1)/train_df_ctry$population*1e5)
-    trained_model <- train.arima(train_df_ctry$log_inc, iter = 1000)
-    #trained_model <- train.arima(train_df_ctry$new_confirmed, iter = 1000)
-    preds <- predict.arima(trained_model, d = 1000)
-    mean_preds <- rowMeans(preds)
-    #pred_mat[k, ] <- mean_preds
-    pred_mat[k, ] <- exp(mean_preds) * train_df_ctry$population[1] / 1e5 -1
-  }
-  
-  # combine
-  pred_df <- data.frame(pred_mat) %>%
-    set_names(paste0("pred_ahead_", 1:n_preds)) %>%
-    mutate(id = ctry,
-           date = test_df_ctry$date) %>%
-    reshape2::melt(c("id", "date"))  %>%
-    rename(n_ahead = variable) %>%
-    mutate(n_ahead = as.numeric(stringi::stri_extract(n_ahead, regex = "\\d{1,2}"))) %>%
-    mutate(date = date %m+% days(n_ahead))
-  write_csv(pred_df, paste0("predictions/arima/", ctry, ".csv"))
-  results_am[[j]] <- pred_df
-}
-
-results_am_df <- do.call(rbind, results_am)
-results_am_df <- left_join(results_am_df, dplyr::select(df, id, date, new_confirmed))
-```
-
-### Evaluation
-
-```{r}
-ggplot() +
-  geom_line(data = results_am_df, mapping = aes(x = date, y = value, color = n_ahead)) +
-  geom_line(data = subset(results_am_df, n_ahead == 1), mapping = aes(x = date, y = new_confirmed), color = "black") +
-  facet_wrap(~ id) +
-  scale_color_viridis_c() +
-  labs(y = "Number of new cases", color = "N") +
-  theme_bw() +
-  theme(axis.title.x = element_blank())
-```
-
 
 ## Prophet
 
-### Toy example
+### Under the hood
+
+```{r}
+# data
+n0 <- 150
+n <- 240
+data <- df %>%
+  dplyr::filter(id == "IRL") %>%
+  slice(n0:n) %>%
+  mutate(x = n0:n) %>%
+  mutate(log_inc = trans(new_confirmed, population)) %>%
+  mutate(inc = trans(new_confirmed, population, transfct = NULL)) 
+
+plot(data$inc, type = "b")
+
+dsy <- data %>% 
+  rename(y = log_inc, ds = date) %>%
+  dplyr::select(ds, y)
+
+# model
+m <- prophet(df = dsy, 
+             growth = "linear", 
+             changepoint.range = ((n-n0+1) - 7)/(n-n0+1), n.changepoints = (n-n0+1)/14, changepoint.prior.scale = 0.25,
+             yearly.seasonality = F, weekly.seasonality = 'auto', daily.seasonality = F, seasonality.mode = "multiplicative")
+
+# predict
+future <- make_future_dataframe(m, periods = 21, freq = "day", include_history = T)
+forecast <- prophet:::predict.prophet(m, future)
+
+plot(m, forecast) + add_changepoints_to_plot(m)
+```
+
+### Test functions
 
 ```{r}
 deu_first200 <- df %>%
@@ -433,64 +503,6 @@ deu_first221 <- df %>%
 plot.predict(deu_first221$date, deu_first221$new_confirmed, deu_pred)
 ```
 
-### Train & Pred
-
-```{r}
-set.seed(12345) 
-
-results_pt <- list()
-
-for (j in 1:length(countries)) {
-  
-  # data
-  ctry <- countries[j]
-  df_ctry <- subset(df, id == ctry)
-  
-  # test data
-  test_df_ctry <- slice(df_ctry, (n_train+1):nrow(df_ctry))
-  
-  # predictions
-  pred_mat <- matrix(NA, ncol = n_preds, nrow = nrow(test_df_ctry))
-  for (k in 1:nrow(test_df_ctry)) {
-    train_df_ctry <- df_ctry %>%
-      slice(1:(n_train+k-1)) %>%
-      rename(target = new_confirmed)
-    trained_model <- train(train_df_ctry)
-    preds <- predict(trained_model)
-    mean_preds <- rowMeans(preds)
-    pred_mat[k, ] <- mean_preds
-  }
-  
-  # combine
-  pred_df <- data.frame(pred_mat) %>%
-    set_names(paste0("pred_ahead_", 1:n_preds)) %>%
-    mutate(id = ctry,
-           date = test_df_ctry$date) %>%
-    reshape2::melt(c("id", "date")) %>%
-    rename(n_ahead = variable) %>%
-    mutate(n_ahead = as.numeric(stringi::stri_extract(n_ahead, regex = "\\d{1,2}")))
-  write_csv(pred_df, paste0("predictions/prophet/", ctry, ".csv"))
-  results_pt[[j]] <- pred_df
-}
-
-results_pt_df <- do.call(rbind, results_pt)
-results_pt_df <- left_join(results_pt_df, dplyr::select(df, id, date, new_confirmed))
-```
-
-### Evaluation
-
-```{r}
-ggplot() +
-  geom_line(data = results_pt_df, mapping = aes(x = date, y = value, color = n_ahead)) +
-  geom_line(data = subset(results_pt_df, n_ahead == 1), mapping = aes(x = date, y = new_confirmed), color = "black") +
-  facet_wrap(~ id) +
-  scale_color_viridis_c() +
-  labs(y = "Number of new cases", color = "N") +
-  theme_bw() +
-  theme(axis.title.x = element_blank())
-```
-
-
 ## Gaussian Process
 
 
@@ -500,10 +512,11 @@ ggplot() +
 # prior
 sim_data <- list(T = 90,
                  x = 1:90,
-                 alpha1 = 1,
+                 alpha1 = 2,
                  rho1 = 90,
-                 alpha2 = 0.5,
-                 rho2 = 1,
+                 alpha2 = 0.4,
+                 rho2p = 1,
+                 rho2e = 25,
                  alpha3 = 1,
                  rho3 = 20)
 gp_prior <- stan(file='models/gp_prior.stan', data=sim_data,
@@ -512,34 +525,32 @@ gp_prior <- stan(file='models/gp_prior.stan', data=sim_data,
 
 prior_draws <- gp_prior %>%
   spread_draws(y[x]) %>%
-  subset( .draw %in% sample(1:4000, 10)) 
+  subset( .draw %in% sample(1:4000, 5))
 
 prior_draws %>%
   ggplot(aes(x=x,y=y,group=as.factor(.draw), color = as.factor(.draw))) +
   geom_line()
 
-
-library(cmdstanr)
-library(posterior)
-library(bayesplot)
-
 # train data
-n0 <- 1
-n <- 89
+df_deu <- df %>% dplyr::filter(id == "DEU") %>% arrange(date)
+n0 <- 241
+n <- 330
 data <- df %>%
   dplyr::filter(id == "DEU") %>%
   slice(n0:n) %>%
   mutate(x = n0:n) %>%
-  mutate(log_inc = trans(new_confirmed, population, transfct = function(x) log(x + 1)))
+  mutate(inc = trans(new_confirmed, population, transfct = NULL)) %>%
+  mutate(log_inc = trans(new_confirmed, population))
 
-plot(data$log_inc)
+plot(data$log_inc, type = "b")
 
 # test data
 test_data <- df %>%
   dplyr::filter(id == "DEU") %>%
   slice((n+1):(n+21)) %>%
   mutate(x = (n+1):(n+21)) %>%
-  mutate(log_inc = trans(new_confirmed, population, transfct = function(x) log(x + 1)))
+  mutate(inc = trans(new_confirmed, population, transfct = NULL)) %>%
+  mutate(log_inc = trans(new_confirmed, population))
 
 data_list <- list(N1 = nrow(data), 
                   N2 = (n-n0+1)+21,
@@ -562,7 +573,7 @@ gp_mod_fit <- gp_mod$sample(
   iter_sampling = 500,
   save_warmup = T
 )
-gp_mod_fit$summary(c("sigma", "alpha0", "rho1", "alpha1", "alpha2", "rho2"))
+gp_mod_fit$summary(c("sigma", "alpha0", "rho1", "alpha1", "alpha2"))
 np = nuts_params(gp_mod_fit)
 mcmc_pairs(gp_mod_fit$draws(c("rho1", "alpha0", "alpha1", "alpha2")), np = np)
 mcmc_trace(gp_mod_fit$draws(c("alpha1", "rho1", "sigma"), inc_warmup = T), n_warmup = 500)
@@ -575,12 +586,52 @@ ypred <- gp_mod_fit$draws("y2") %>%
   mutate(draw = 1:n()) %>%
   ungroup() %>%
   dplyr::select(-key) %>%
-  rename(y = value)
+  rename(log_inc = value) %>%
+  mutate(new_confirmed = inv_trans(log_inc, data$population[1])) %>%
+  mutate(inc = trans(new_confirmed, data$population[1], transfct = NULL))
+  
+
+ggplot(mapping = aes(x = x, y = inc)) +
+  stat_lineribbon(data = ypred) +
+  scale_fill_brewer() +
+  geom_line(data = rbind(data, test_data), color = "red")
+
+# latent GP alternative
+data_list_lat <- list(N1 = nrow(data),
+                      N2 = (n-n0+1)+21,
+                      y1 = data$new_confirmed,
+                      x1 = data$x,
+                      x2 = c(data$x, test_data$x),
+                      pop = data$population[1])
+
+data_list_lat$rho1_shape = summary(gamma_prior_param)$summary["shape",1]
+data_list_lat$rho1_scale = summary(gamma_prior_param)$summary["scale",1]
+lat_gp_mod <- cmdstan_model("models/latent_gp.stan")
+lat_gp_mod_fit <- lat_gp_mod$sample(
+  data =  data_list_lat,
+  seed = 12345,
+  chains = 2,
+  parallel_chains = 2,
+  iter_warmup = 500,
+  iter_sampling = 500,
+  max_treedepth = 15,
+  adapt_delta = 0.95,
+  save_warmup = T
+)
+lat_gp_mod_fit$summary(c("alpha0", "rho1", "alpha1", "alpha2", "rho2", "phi"))
+
+ypred <- lat_gp_mod_fit$draws("y2") %>%
+  as_draws_df() %>%
+  reshape2::melt(c(".draw", ".iteration", ".chain")) %>%
+  dplyr::select(-.chain, -.iteration) %>%
+  mutate(x = n0-1+as.numeric(stringi::stri_extract(gsub("y2", "", variable), regex = "\\d+"))) %>%
+  rename(y = value) %>%
+  dplyr::filter(x <= 100)
 
 ggplot() +
   stat_lineribbon(data = ypred, mapping = aes(x = x, y = y)) +
   scale_fill_brewer() +
-  geom_line(data = rbind(data, test_data), mapping = aes(x = x, y = log_inc), color = "red")
+  geom_line(data = rbind(data), mapping = aes(x = x, y = new_confirmed), color = "red")
 ```
 
 ### Toy example

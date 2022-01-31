@@ -1,6 +1,9 @@
 # Files
 predictions/**/*.rds
-predictions/**/*.csv
+results/
+*.nb
+*.pdf
+/**/_old
 
 
 # R

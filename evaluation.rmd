@@ -33,7 +33,7 @@ source("helper/plotting.r")
 files <- list.files("predictions", pattern = ".rds", full.names = T)
 
 # models
-models <- c("arima", "prophet", "cori", "gp")
+models <- c("cori", "arima", "prophet", "gp")
 
 # parameters
 # - model colors
@@ -117,12 +117,14 @@ mean10 <- do.call(rbind, lapply(files, function(f) {
 }))
 
 mean10_pl <- ggplot(mean10, mapping = aes(x = date, y = value, color = variable)) +
-  facet_wrap(~ id, ncol = 3) +
+  facet_wrap(~ id, ncol = 3, scales = "free_x") +
   geom_line(alpha = .5) +
   scale_color_manual(values = c("black", mcols)) +
   scale_y_continuous(limits = c(0, 300), expand = c(0,0)) +
+  scale_x_date(date_breaks = "1 month") +
   theme_bw2() +
-  theme(axis.title.x = element_blank(), legend.position = "top") +
+  theme(axis.title.x = element_blank(), legend.position = "top",
+        axis.text.x = element_text(angle = 90)) +
   labs(y = "Incidence (per 100,000 population)", 
        color = "Model forecast",
        title = "Mean forecast by model", 
@@ -258,7 +260,7 @@ df_ps <- do.call(rbind, map(files, function(f) {
 }))
 
 crps_pl <- df_ps %>%
-  plot_score(models = models) +
+  plot_score(models = models, model_colors = mcols) +
   labs(y = "Score", x = "Models",
        title = "CRPS",
        subtitle = "Boxplot of average country scores") +
@@ -269,24 +271,7 @@ crps_pl
 save_plot(crps_pl, "results/crps.pdf", w = 21, h = 14)
 ```
 
-### By N
-
-```{r}
-crps_by_n_pl <- df_ps %>%
-  add_n_ahead() %>%
-  mutate(group = cut(n, breaks = n_brks, labels = n_lbs)) %>%
-  plot_score(models = models) +
-  labs(y = "Score", x = "Model",
-       title = "CRPS",
-       subtitle = "Boxplot of average country scores by n-day ahead forecast") +
-  theme_bw2()
-
-crps_by_n_pl
-
-save_plot(crps_by_n_pl, "results/crps_by_n.pdf", w = 21, h = 14)
-```
-
-### Log
+### Censored
 
 ```{r}
 df_cens_ps <- do.call(rbind, map(files, function(f) {
@@ -295,7 +280,7 @@ df_cens_ps <- do.call(rbind, map(files, function(f) {
 }))
 
 cens_crps_pl <- df_cens_ps %>%
-  plot_score(models = models) +
+  plot_score(models = models, model_colors = mcols) +
   labs(y = "Score", x = "Models",
        title = "Censored CRPS",
        subtitle = "Boxplot of average country scores") +
@@ -306,6 +291,67 @@ cens_crps_pl
 save_plot(cens_crps_pl, "results/censored_crps.pdf", w = 21, h = 14)
 ```
 
+#### By N
+
+```{r}
+crps_by_n_pl <- df_cens_ps %>%
+  add_n_ahead() %>%
+  mutate(group = cut(n, breaks = n_brks, labels = n_lbs)) %>%
+  plot_score(models = models, model_colors = mcols) +
+  labs(y = "Score", x = "Model",
+       title = "CRPS",
+       subtitle = "Boxplot of average country scores by n-day ahead forecast") +
+  theme_bw2()
+
+crps_by_n_pl
+
+save_plot(crps_by_n_pl, "results/crps_by_n.pdf", w = 21, h = 14)
+```
+
+#### By phase
+
+```{r}
+phases <- read_csv("predictions/phase-labeling.csv")
+
+which_phase <- function(id, date) {
+  sub <- phases %>%
+    dplyr::filter(state == id) %>%
+    dplyr::filter(date > start) %>%
+    dplyr::filter(date <= end)
+  return(sub$label)
+}
+  
+crps_by_phase <- df_cens_ps %>%
+  add_n_ahead() %>%
+  rowwise() %>%
+  mutate(phase = which_phase(state_id, test_date))
+
+crps_by_phase_pl <- crps_by_phase %>%
+  dplyr::select(c("n", "phase", models)) %>%
+  melt(c("n", "phase")) %>%
+  group_by(n, phase, variable) %>%
+  summarize(mean_score = mean(value)) %>%
+  ungroup() %>%
+  mutate(variable = factor(variable, levels = models)) %>%
+  mutate(phase = ifelse(phase == "I", "Increase", 
+                        ifelse(phase == "D", "Decrease", 
+                               ifelse(phase == "F", "Flat", "Peak-change")))) %>%
+  mutate(phase = factor(phase, levels = c("Increase", "Peak-change", "Decrease", "Flat"))) %>%
+  ggplot(aes(x = n, y = mean_score, color = variable)) +
+  facet_wrap(~ phase) +
+  geom_line() +
+  scale_y_continuous(expand = c(0,0), limits = c(0, NA)) +
+  scale_color_manual(values = mcols) +
+  labs(y = "Score", x = "Number of days forecasted ahead",
+       title = "CRPS by epidemic phase",
+       subtitle = "Average CRPS by phase from five US states (AK, AL, AR, AZ, CA)") +
+  theme_bw2() 
+  
+
+crps_by_phase_pl
+
+save_plot(crps_by_phase_pl, "results/crps_by_phase.pdf", w = 21, h = 14)
+```
 
 ### Weighted
 
@@ -327,7 +373,7 @@ df_ps_weighted <- df_cens_ps %>%
   ungroup()
 
 crps_weighted_pl <- df_ps_weighted %>%
-  plot_score(models = models) +
+  plot_score(models = models, model_colors = mcols) +
   theme_bw2() +
   labs(y = "Score", x = "Model",
        title = "Censored weighted CRPS",
@@ -367,7 +413,7 @@ df_cens_ps_pb_weighted <- df_cens_ps_pb %>%
   ungroup()
 
 crps_asym_pl <- df_cens_ps_pb_weighted %>%
-  plot_score(models = models) +
+  plot_score(models = models, model_colors = mcols) +
   labs(y = "Score", x = "Model",
        title = "Censored weighted asymmetric CRPS",
        subtitle = "Boxplot of average country scores") +
@@ -381,121 +427,130 @@ save_plot(crps_asym_pl, "results/crps_weighted_asym.pdf", w = 21, h = 14)
 ```{r}
 all_crps_pl <- grid.arrange(crps_pl, cens_crps_pl, crps_weighted_pl, crps_asym_pl, ncol = 2)
 save_plot(all_crps_pl, "results/crps_comparison.pdf", w = 20, h = 20)
+save_plot(all_crps_pl, "results/crps_comparison.png", w = 20, h = 12)
 ```
 
 
-## Regret
+<!-- ## Regret -->
 
-```{r}
-df_rr <- do.call(rbind, map(files, function(f) {
-  print(sprintf("Processing file %s", f))
-  read_files(f) %>%
-    rowwise() %>%
-    mutate_at(vars(models), ~ regret_score(., new_confirmed, pop = population[1], w = w, b = .5)) %>%
-    unnest(cols = c("n", "date", "new_confirmed", models))
-}))
-```
+<!-- ```{r} -->
+<!-- df_rr <- do.call(rbind, map(files, function(f) { -->
+<!--   print(sprintf("Processing file %s", f)) -->
+<!--   read_files(f) %>% -->
+<!--     rowwise() %>% -->
+<!--     mutate_at(vars(models), ~ regret_score(., new_confirmed, pop = population[1], w = w, b = .5)) %>% -->
+<!--     unnest(cols = c("n", "date", "new_confirmed", models)) -->
+<!-- })) -->
+<!-- ``` -->
 
-### Overall
+<!-- ### Overall -->
 
-```{r}
-regret_pl <- df_rr %>%
-  dplyr::select(id, models) %>%
-  reshape2::melt(c("id")) %>%
-  group_by(variable) %>%
-  summarize(m = median(value),
-            q1 = quantile(value, .25),
-            q3 = quantile(value, .75)) %>%
-  ungroup() %>%
-  ggplot(aes(x = variable)) +
-  geom_point(aes(y = m)) +
-  geom_errorbar(aes(ymin = q1, ymax = q3), width = .1) +
-  theme_bw2() +
-  theme(axis.title.x = element_blank()) +
-  labs(y = "Regret score (Median and IQR)", x = "",
-       title = "Regret",
-       subtitle = "Regret score by method and length of forecast") +
-  theme_bw2()
+<!-- ```{r} -->
+<!-- regret_pl <- df_rr %>% -->
+<!--   dplyr::select(id, models) %>% -->
+<!--   reshape2::melt(c("id")) %>% -->
+<!--   group_by(variable) %>% -->
+<!--   summarize(m = median(value), -->
+<!--             q1 = quantile(value, .25), -->
+<!--             q3 = quantile(value, .75)) %>% -->
+<!--   ungroup() %>% -->
+<!--   ggplot(aes(x = variable)) + -->
+<!--   geom_point(aes(y = m)) + -->
+<!--   geom_errorbar(aes(ymin = q1, ymax = q3), width = .1) + -->
+<!--   theme_bw2() + -->
+<!--   theme(axis.title.x = element_blank()) + -->
+<!--   labs(y = "Regret score (Median and IQR)", x = "", -->
+<!--        title = "Regret", -->
+<!--        subtitle = "Regret score by method and length of forecast") + -->
+<!--   theme_bw2() -->
 
-regret_pl
+<!-- regret_pl -->
 
-save_plot(regret_pl, "results/regret.pdf", w = 21, h = 14)
-```
+<!-- save_plot(regret_pl, "results/regret.pdf", w = 21, h = 14) -->
+<!-- ``` -->
 
-### By ID
+<!-- ### By ID -->
 
-```{r}
-regret_by_id_pl <- df_rr %>%
-  dplyr::select(id, models) %>%
-  reshape2::melt(c("id")) %>%
-  group_by(id, variable) %>%
-  summarize(m = median(value)) %>%
-  ungroup() %>%
-  ggplot(aes(x = id, y = m, fill = variable)) +
-  geom_bar(stat = "identity", position = position_dodge()) +
-  scale_fill_manual(values = mcols) +
-  theme_bw2() +
-  theme(axis.title.x = element_blank(), legend.title = element_blank()) +
-  labs(y = "Regret score (Median)", x = "",
-       title = "Regret",
-       subtitle = "Regret score by method and country") 
-  
-regret_by_id_pl
+<!-- ```{r} -->
+<!-- regret_by_id_pl <- df_rr %>% -->
+<!--   dplyr::select(id, models) %>% -->
+<!--   reshape2::melt(c("id")) %>% -->
+<!--   group_by(id, variable) %>% -->
+<!--   summarize(m = median(value)) %>% -->
+<!--   ungroup() %>% -->
+<!--   ggplot(aes(x = id, y = m, fill = variable)) + -->
+<!--   geom_bar(stat = "identity", position = position_dodge()) + -->
+<!--   scale_fill_manual(values = mcols) + -->
+<!--   theme_bw2() + -->
+<!--   theme(axis.title.x = element_blank(), legend.title = element_blank()) + -->
+<!--   labs(y = "Regret score (Median)", x = "", -->
+<!--        title = "Regret", -->
+<!--        subtitle = "Regret score by method and country")  -->
 
-save_plot(regret_by_id_pl, "results/regret_by_id.pdf", w = 21, h = 14)
-```
+<!-- regret_by_id_pl -->
+
+<!-- save_plot(regret_by_id_pl, "results/regret_by_id.pdf", w = 21, h = 14) -->
+<!-- ``` -->
 
 
-### By incidence
+<!-- ### By incidence -->
 
-```{r}
-regret_by_inc_pl <- df_rr %>%
-  mutate(incidence = trans(new_confirmed, pop = population, transfct = NULL)) %>%
-  mutate(group = cut(incidence, breaks = c(-Inf, 30, 50, 100, Inf), 
-                     labels = paste(c("low", "medium", "high", "very high"), "incidence", sep = " "))) %>%
-  dplyr::select(id, group, models) %>%
-  reshape2::melt(c("id", "group")) %>%
-  plot_score() +
-  labs(y = "CRPS (Median and IQR)", x = "",
-       title = "Skill",
-       subtitle = "CRPS by method and incidence") +
-  theme_bw2()
+<!-- ```{r} -->
+<!-- regret_by_inc_pl <- df_rr %>% -->
+<!--   mutate(incidence = trans(new_confirmed, pop = population, transfct = NULL)) %>% -->
+<!--   mutate(group = cut(incidence, breaks = c(-Inf, 30, 50, 100, Inf),  -->
+<!--                      labels = paste(c("low", "medium", "high", "very high"), "incidence", sep = " "))) %>% -->
+<!--   dplyr::select(id, group, models) %>% -->
+<!--   reshape2::melt(c("id", "group")) %>% -->
+<!--   plot_score() + -->
+<!--   labs(y = "CRPS (Median and IQR)", x = "", -->
+<!--        title = "Skill", -->
+<!--        subtitle = "CRPS by method and incidence") + -->
+<!--   theme_bw2() -->
 
-regret_by_inc_pl
+<!-- regret_by_inc_pl -->
 
-save_plot(regret_by_inc_pl, "results/regret_by_inc.pdf", w = 21, h = 14)
-```
+<!-- save_plot(regret_by_inc_pl, "results/regret_by_inc.pdf", w = 21, h = 14) -->
+<!-- ``` -->
 
 ## Hotspot 
 
 ```{r}
 df_hot <- do.call(rbind, map(files, function(f) {
+  # read file
   print(sprintf("Processing file %s", f))
-  read_files(f) %>%
-  get_max_N() %>%
-  dplyr::filter(max_N >= 8) %>%
-  rowwise() %>%
-  mutate_at(vars(models), ~ hotspot_proba(., new_confirmed, q = 0.25)) %>%
-  dplyr::select(id, n, models, max_N) %>%
-  mutate_at(vars(n), ~ list(.[1:(max_N-7)])) %>%
-  unnest(cols = c("n", models), names_sep = "_")
+  df <- read_files(f) 
+  
+  # compute hotspot probabilities and create list from matrix
+  prob_hot <- lapply(models, function(m) {
+    P <- sapply(df, function(X) p_hotspot(X[[m]])) 
+    lapply(seq_len(ncol(P)), function(i) P[ ,i]) })
+  names(prob_hot) <- models
+  
+  # determine true (if hotspot) and create list from matrix
+  hot <- sapply(df, function(X) is_hotspot(X$inc))
+  prob_hot$hot <- lapply(seq_len(ncol(hot)), function(i) hot[ ,i])
+  
+  # add state_id and n to list
+  prob_hot$n <- lapply(1:length(df), function(x) 1:nrow(hot) + 7)
+  prob_hot$state_id <- df[[1]]$state_id[1]
+  
+  # combine to long dataframe
+  prob_hot <- unnest(as_data_frame(prob_hot), c("n", "hot", models)) 
 }))
 
 df_hot_pl <- df_hot %>%
-  rename(hotspot = cori_hotspot) %>%
-  dplyr::select(n, contains("proba"), hotspot) %>%
-  melt(c("n", "hotspot")) %>%
-  mutate(variable = gsub("_proba", "", variable)) %>%
+  filter(!is.na(hot)) %>%
+  melt(c("n", "hot", "state_id")) %>%
   group_by(n, variable) %>%
-  summarize(AUC = auc(hotspot, value)[1]) %>%
+  summarize(AUC = auc(hot, value)[1]) %>%
   ungroup() %>%
+  mutate(variable = factor(variable, levels = models)) %>%
   ggplot(aes(x = n, y = AUC, color = variable, shape = variable)) +
   geom_point() +
   geom_line() +
   geom_hline(aes(yintercept = 0.5), linetype = "dashed") +
-  scale_color_brewer(palette = "Dark2") +
-  scale_y_continuous(limits = c(.4, .7), breaks = seq(0, 1, .1), labels = function(x) x * 100) +
-  scale_x_continuous(breaks = seq(1,14)) +
+  scale_color_manual(values = mcols) +
   labs(x = "Number of days forecasted ahead", 
        y = "AUC for hotspot dates (%)", 
        color = "Model", shape = "Model",
@@ -506,7 +561,8 @@ df_hot_pl <- df_hot %>%
   
 df_hot_pl
 
-save_plot(df_hot_pl, "results/hotspot.pdf", w = 21, h = 14)
+save_plot(df_hot_pl, "results/hotspot.pdf", w = 20, h = 14)
+save_plot(df_hot_pl, "results/hotspot.png", w = 20, h = 12)
 ```
 
 <!-- ### TPP and FPP -->
@@ -595,75 +651,75 @@ save_plot(df_hot_pl, "results/hotspot.pdf", w = 21, h = 14)
 <!-- save_plot(critical_pl, "results/critical_incidence.pdf", w = 21, h = 18) -->
 <!-- ``` -->
 
-## Peak delay
+<!-- ## Peak delay -->
 
-```{r}
-df_peak <- do.call(rbind, map(files, function(f) {
-  print(sprintf("Processing file %s", f))
-  df <- read_files(f) %>%
-    dplyr::select(id, population, new_confirmed, date, n, arima, prophet, cori) %>%
-    rowwise() %>%
-    mutate_at(vars(arima, cori, prophet), ~ list(apply(., 1, mean))) %>%
-    unnest(cols = c("n", "date", "new_confirmed", "arima", "cori", "prophet")) %>%
-    mutate_at(vars(new_confirmed, arima, cori, prophet), ~ . / population * 1e5) %>%
-    dplyr::select(id, date, n, new_confirmed, arima, cori, prophet) 
-  
-  df %>%
-    group_by(id, n) %>%
-    nest() %>%
-    mutate(data = map(data, ~ mutate(.x, peak = is_peak(new_confirmed, min_x = 15)))) %>%
-    mutate(data = map(data, ~ mutate_at(.x, vars(arima, cori, prophet), list(peak = ~ is_closest_peak(., peak, t_right = Inf))))) %>%
-    mutate(data_peak = map(data, function(D) {
-      pd <- data.frame(cbind.fill(
-        (D$date[D$peak]),
-        (D$date[D$arima_peak]),
-        (D$date[D$cori_peak]),
-        (D$date[D$prophet_peak]),
-        (D$new_confirmed[D$peak]),
-        (D$arima[D$arima_peak]),
-        (D$cori[D$cori_peak]),
-        (D$prophet[D$prophet_peak])
-      ), stringsAsFactors = F) %>%
-        set_names(c("obs_date", "arima_date", "cori_date", "prophet_date",
-                    "obs_inc", "arima_inc", "cori_inc", "prophet_inc")) %>%
-        mutate_at(vars(matches("date")), as.Date, origin = "1970-01-01") %>%
-        mutate_at(vars(matches("inc")), as.numeric)
-      return(pd)
-    })) %>%
-    dplyr::select(id, n, data_peak) %>%
-    unnest(cols = "data_peak") %>%
-    group_by(id, n) %>%
-    mutate(peak_no = 1:n()) %>%
-    ungroup()
-}))
+<!-- ```{r} -->
+<!-- df_peak <- do.call(rbind, map(files, function(f) { -->
+<!--   print(sprintf("Processing file %s", f)) -->
+<!--   df <- read_files(f) %>% -->
+<!--     dplyr::select(id, population, new_confirmed, date, n, arima, prophet, cori) %>% -->
+<!--     rowwise() %>% -->
+<!--     mutate_at(vars(arima, cori, prophet), ~ list(apply(., 1, mean))) %>% -->
+<!--     unnest(cols = c("n", "date", "new_confirmed", "arima", "cori", "prophet")) %>% -->
+<!--     mutate_at(vars(new_confirmed, arima, cori, prophet), ~ . / population * 1e5) %>% -->
+<!--     dplyr::select(id, date, n, new_confirmed, arima, cori, prophet)  -->
 
-# nuber of peaks by country
-df_peak %>% 
-  group_by(id) %>%
-  summarize(max(peak_no)) 
+<!--   df %>% -->
+<!--     group_by(id, n) %>% -->
+<!--     nest() %>% -->
+<!--     mutate(data = map(data, ~ mutate(.x, peak = is_peak(new_confirmed, min_x = 15)))) %>% -->
+<!--     mutate(data = map(data, ~ mutate_at(.x, vars(arima, cori, prophet), list(peak = ~ is_closest_peak(., peak, t_right = Inf))))) %>% -->
+<!--     mutate(data_peak = map(data, function(D) { -->
+<!--       pd <- data.frame(cbind.fill( -->
+<!--         (D$date[D$peak]), -->
+<!--         (D$date[D$arima_peak]), -->
+<!--         (D$date[D$cori_peak]), -->
+<!--         (D$date[D$prophet_peak]), -->
+<!--         (D$new_confirmed[D$peak]), -->
+<!--         (D$arima[D$arima_peak]), -->
+<!--         (D$cori[D$cori_peak]), -->
+<!--         (D$prophet[D$prophet_peak]) -->
+<!--       ), stringsAsFactors = F) %>% -->
+<!--         set_names(c("obs_date", "arima_date", "cori_date", "prophet_date", -->
+<!--                     "obs_inc", "arima_inc", "cori_inc", "prophet_inc")) %>% -->
+<!--         mutate_at(vars(matches("date")), as.Date, origin = "1970-01-01") %>% -->
+<!--         mutate_at(vars(matches("inc")), as.numeric) -->
+<!--       return(pd) -->
+<!--     })) %>% -->
+<!--     dplyr::select(id, n, data_peak) %>% -->
+<!--     unnest(cols = "data_peak") %>% -->
+<!--     group_by(id, n) %>% -->
+<!--     mutate(peak_no = 1:n()) %>% -->
+<!--     ungroup() -->
+<!-- })) -->
 
-peak_delay <- df_peak %>%
-  group_by(id) %>%
-  dplyr::filter(obs_inc == max(obs_inc)) %>% # use maximum peak for now
-  mutate_at(vars(arima_date, cori_date, prophet_date), list(ddiff = ~ n - as.numeric(. - obs_date))) 
-  
-peak_delay_pl <- peak_delay %>%
-  mutate(n = cut(n, breaks = n_brks, labels = n_lbs)) %>%
-  dplyr::select(id, n, matches("ddiff")) %>%
-  melt(c("id", "n")) %>%
-  mutate(variable = gsub("_date_ddiff", "", variable)) %>%
-  rename(group = n) %>%
-  plot_score(CrI = c(0.5, 0.8)) +
-  geom_vline(aes(xintercept = 0), linetype = "dotted") +
-  labs(x = "Predicted days ahead - (method peak - observed peak)", 
-       y = "Method",
-       title = "Peak delay",
-       subtitle = "Peak delay by method and weekly ahead forecast",
-       caption = "Note: Data summarized by the highest peak of each country.") +
-  theme_bw2()
+<!-- # nuber of peaks by country -->
+<!-- df_peak %>%  -->
+<!--   group_by(id) %>% -->
+<!--   summarize(max(peak_no))  -->
 
-save_plot(peak_delay_pl, "results/peak_delay.pdf", w = 21, h = 18)
-```
+<!-- peak_delay <- df_peak %>% -->
+<!--   group_by(id) %>% -->
+<!--   dplyr::filter(obs_inc == max(obs_inc)) %>% # use maximum peak for now -->
+<!--   mutate_at(vars(arima_date, cori_date, prophet_date), list(ddiff = ~ n - as.numeric(. - obs_date)))  -->
+
+<!-- peak_delay_pl <- peak_delay %>% -->
+<!--   mutate(n = cut(n, breaks = n_brks, labels = n_lbs)) %>% -->
+<!--   dplyr::select(id, n, matches("ddiff")) %>% -->
+<!--   melt(c("id", "n")) %>% -->
+<!--   mutate(variable = gsub("_date_ddiff", "", variable)) %>% -->
+<!--   rename(group = n) %>% -->
+<!--   plot_score(CrI = c(0.5, 0.8)) + -->
+<!--   geom_vline(aes(xintercept = 0), linetype = "dotted") + -->
+<!--   labs(x = "Predicted days ahead - (method peak - observed peak)",  -->
+<!--        y = "Method", -->
+<!--        title = "Peak delay", -->
+<!--        subtitle = "Peak delay by method and weekly ahead forecast", -->
+<!--        caption = "Note: Data summarized by the highest peak of each country.") + -->
+<!--   theme_bw2() -->
+
+<!-- save_plot(peak_delay_pl, "results/peak_delay.pdf", w = 21, h = 18) -->
+<!-- ``` -->
 
 
 
