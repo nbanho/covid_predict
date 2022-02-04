@@ -40,7 +40,7 @@ run_prediction_us <- function() {
         
         # predict
         predicted_cori <- predict.cori(trained_cori, seed = seed12345)
-        test_df_state$data[[k]]$cori <- matrix(predicted_cori[1:n_preds,1:n_draws], ncol = n_draws)
+        test_df_state$data[[k]]$cori <- get_samples(predicted_cori, k)
       }
       
       if ("arima" %in% models) {
@@ -49,7 +49,7 @@ run_prediction_us <- function() {
         
         # predict
         predicted_arima <- predict.arima(trained_arima, seed = seed12345)
-        predicted_arima <- matrix(predicted_arima[1:n_preds,1:n_draws], ncol = n_draws)
+        predicted_arima <- get_samples(predicted_arima, k)
         test_df_state$data[[k]]$arima <- expm1(predicted_arima)
       } 
       
@@ -63,7 +63,7 @@ run_prediction_us <- function() {
         
         # predict
         predicted_prophet <- predict.prophet(trained_prophet)
-        predicted_prophet <- matrix(predicted_prophet[1:n_preds,1:n_draws], ncol = n_draws)
+        predicted_prophet <- get_samples(predicted_prophet, k)
         test_df_state$data[[k]]$prophet <- expm1(predicted_prophet)
       }
       
@@ -75,7 +75,7 @@ run_prediction_us <- function() {
         
         # predict
         predicted_gp <- predict.gp(trained_gp)
-        predicted_gp <- matrix(predicted_gp[1:n_preds,1:n_draws], ncol = n_draws)
+        predicted_gp <- get_samples(predicted_gp, k)
         test_df_state$data[[k]]$gp <- expm1(predicted_gp)
       }
     }
