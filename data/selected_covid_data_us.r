@@ -77,7 +77,7 @@ for (st in toupper(selected_states)) {
       dplyr::filter(date >= date_seq[d] %m-% days(56))
     list_st_test[[d]] <- df_st %>% 
       dplyr::select(date, cases, incidence) %>%
-      dplyr::filter(date >= start_date) %>% 
+      dplyr::filter(date >= date_seq[d]) %>% 
       dplyr::filter(date < date_seq[d] %m+% days(21))
   }
   df_st_train <- tibble(state = "st", forecast_date = date_seq, data = list_st_train)
