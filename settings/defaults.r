@@ -25,16 +25,16 @@ n_chains <- 4
 # prophet.max_inc <- 250 # 25% above the highest observed incidence per 1e5 pop. from BEL and ESP
 
 # get samples
-get_samples <- function(DM, k, ns = n_draws, np = n_preds) {
+get_samples <- function(DM, TM, k, ns = n_draws, np = n_preds) {
   DM <- DM[ ,1:n_draws]
   DM <- matrix(DM, ncol = n_draws)
-  n <- nrow(DM)
+  n <- nrow(TM)
   if (k < n_preds) {
     return(tail(DM,k))
   } else if (n == n_preds) {
     return(DM)
   } else {
-    return(head(DM,n_preds-n))
+    return(head(DM,n))
   }
 }
 
