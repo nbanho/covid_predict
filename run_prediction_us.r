@@ -34,7 +34,7 @@ run_prediction_us <- function() {
     
     # loop over forecasting dates
     K <- nrow(train_df_state)
-    for (k in 1:21) {
+    for (k in 1:K) {
       
       # train and forecast for each model
       if ("cori" %in% models) {
