@@ -2,7 +2,7 @@ run_prediction_us <- function() {
   
   # settings
   args <- commandArgs(trailingOnly = TRUE)
-  state <- unlist(stringr::str_split(args[1], "8"))
+  states <- unlist(stringr::str_split(args[1], "8"))
   models <- unlist(stringr::str_split(args[2], "8"))
   source("settings/defaults.r")
   
@@ -16,12 +16,14 @@ run_prediction_us <- function() {
   source("models/prophet.r")
   source("models/gp.r")
   
-  # states
-  if (grepl("all", state)) {
-    states <- unique(stringi::stri_extract(list.files("data/us-selected-states/"), regex = "\\w{2}")) 
-  } else {
-    states <- state
+  if (grepl("all", models)) {
+    models <- c("cori", "arima", "prophet", "gp")
   }
+  
+  # states
+  if (grepl("all", states)) {
+    states <- unique(stringi::stri_extract(list.files("data/us-selected-states/"), regex = "\\w{2}")) 
+  } 
   
   for (j in 1:length(states)) {
     
