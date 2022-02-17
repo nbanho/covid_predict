@@ -2,8 +2,8 @@ run_prediction_us <- function() {
   
   # settings
   args <- commandArgs(trailingOnly = TRUE)
-  state <- unlist(str_split(args[1], "8"))
-  models <- unlist(str_split(args[2], "8"))
+  state <- unlist(stringi::str_split(args[1], "8"))
+  models <- unlist(stringi::str_split(args[2], "8"))
   source("settings/defaults.r")
   
   # libraries 
