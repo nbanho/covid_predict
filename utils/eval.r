@@ -8,16 +8,46 @@ library(covidcast)
 read_files <- function(f) { do.call(rbind, map(f, readRDS)) }
 
 # determine maximum days ahead forecast
-get_max_N <- function(D, model = "arima") { D %>% rowwise() %>% mutate(max_N = ifelse(is.null(dim(!! sym(model))), 1, nrow(!! sym(model)))) }
+# get_max_N <- function(D, model = "arima") { D %>% rowwise() %>% mutate(max_N = ifelse(is.null(dim(!! sym(model))), 1, nrow(!! sym(model)))) }
 
-# add n
-add_n_ahead <- function(D) {
-  D %>%
-    group_by_at(c("state_id", "forecast_date")) %>%
-    arrange(test_date) %>%
-    mutate(n = 1:n()) %>%
-    ungroup() 
+# get n_ahead forecast draws by model
+get_n_ahead <- function(D, n = 10) {
+  D$data <- map2(D$data, D$forecast_date, function(d,f) dplyr::filter(d, date == f %m+% days(n-1)))
+  D %>% dplyr::filter(sapply(D$data, nrow) > 0)
 }
+
+# convert matrix of draws to list
+mat_to_list <- function(D, models = c("arima", "cori", "prophet", "gp")) {
+  lapply(D$data, function(d) mutate_at(d, vars(models), ~ list(c(.)))) %>%
+    do.call(rbind, .)
+}
+
+# get mean forecast
+get_mean_forecast <- function(D, models = c("arima", "cori", "prophet", "gp")) {
+  map2(D$data, D$forecast_date, function(d,f) {
+    d %>%
+      mutate_at(vars(models), ~ apply(., 1, mean)) %>%
+      mutate(n = as.numeric(date - f + 1))
+    }) %>%
+    do.call(rbind, .)
+}
+
+# add n_ahead
+add_n_ahead <- function(D) {
+  D$data <- map2(D$data, D$forecast_date, function(d,f) {
+    d %>% mutate(n = as.numeric(date - f + 1))
+  })
+  return(D)
+}
+
+
+# add_n_ahead <- function(D) {
+#   D %>%
+#     group_by_at(c("state_id", "forecast_date")) %>%
+#     arrange(test_date) %>%
+#     mutate(n = 1:n()) %>%
+#     ungroup() 
+# }
 
 # compute incidence
 cc <- county_census %>%
@@ -35,11 +65,14 @@ comp_inc <- function(D, ..., pop = cc) {
 
 
 # add prediction score
-add_pred_score <- function(DL, models = models, ...) {
-  DL %>%
+add_pred_score <- function(D, f, models = models, ...) {
+  D %>%
+    add_n_ahead() %>%
+    .$data %>%
+    lapply(., function(X) mutate(X, state_id = tolower(gsub(".rds", "", basename(f))))) %>%
     lapply(., function(X) comp_inc(X, cori)) %>%
-    lapply(., function(X) cbind(dplyr::select(X, state_id, forecast_date, test_date, inc), 
-                                sapply(models, function(m) pred_score(X[[m]], X$inc, ...)))) %>%
+    lapply(., function(X) cbind(dplyr::select(X, state_id, date, n, incidence), 
+                                sapply(models, function(m) pred_score(X[[m]], X$incidence, ...)))) %>%
     do.call(rbind, .)
 }
 
@@ -181,7 +214,7 @@ plot_score <- function(
       ungroup() %>% 
       mutate(variable = factor(variable, levels = models)) %>%
       ggplot(aes(x = variable, y = mean_score, color = variable)) +
-      facet_wrap(~ group) +
+      facet_wrap(~ group)
   } else {
     pl <- dat %>%
       dplyr::select_at(c("state_id", models)) %>%

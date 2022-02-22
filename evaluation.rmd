@@ -32,6 +32,18 @@ source("helper/plotting.r")
 # files
 files <- list.files("predictions", pattern = ".rds", full.names = T)
 
+# phase labels
+phase_labs <- read_csv("data/us-selected-states_labeled-phases.csv") %>%
+  rename(start_date = date) %>%
+  group_by(state) %>%
+  arrange(start_date) %>%
+  mutate(end_date = dplyr::lead(as.character(start_date), 1)) %>%
+  ungroup() %>%
+  mutate(end_date = ifelse(is.na(end_date), "2021-03-15", end_date)) %>%
+  mutate(end_date = as.Date(end_date)) %>%
+  mutate(epidemic_phase = factor(epidemic_phase, levels = c(c("exponential growth", "subexponential growth", "plateau", 
+                                                              "subexponential decline", "exponential decline"))))
+
 # models
 models <- c("cori", "arima", "prophet", "gp")
 
@@ -42,9 +54,12 @@ mcols <- RColorBrewer::brewer.pal(length(models), "Dark2")
 n_brks <- c(0, 7, 14, 21)
 n_lbs <- paste(c("1", "2", "3"), "-week(s) ahead forecast", sep = " ")
 # - discretize incidence
-inc_small_brks <- c(-Inf, 10, 20, 30, 40, 50, 60, 80, 100, 125, 150, Inf)
+inc_small_brks <- c(-Inf, 10, 30, 50, 70, 90, 110, 150, Inf)
 # - default ahead forecast to look at
 n_ahead <- 10
+
+# graphical parameters
+max_inc <- 300
 ```
 
 
@@ -58,16 +73,17 @@ for (f in files) {
   ctry <- gsub(".rds", "", basename(f))
   print(
     read_files(f) %>%
-      lapply(., function(X) X[n_ahead, ]) %>%
-      lapply(., function(X) mutate_at(X, vars(models), ~ list(c(.)))) %>%
-      do.call(rbind, .) %>%
+      get_n_ahead() %>%
+      mat_to_list() %>%
       unnest(cols = models) %>%
+      mutate(state_id = tolower(ctry)) %>%
       comp_inc(cori) %>%
-      rename(target = inc, date = test_date) %>%
+      rename(target = incidence) %>%
       dplyr::select(date, target, models) %>%
+      mutate_at(models, ~ ifelse(. > max_inc, max_inc, .)) %>%
       melt(c("date")) %>%
       plot_predict(interval = T) +
-      scale_y_continuous(limits = c(0, 300)) +
+      scale_y_continuous(limits = c(0, max_inc), expand = c(0,0)) +
       labs(y = "Incidence (per 100,000 population)", 
            color = "CrI", fill = "CrI",
            title = ctry, 
@@ -76,17 +92,17 @@ for (f in files) {
   
   print(
     read_files(f) %>%
-      lapply(., function(X) mutate_at(X, vars(models), ~ apply(., 1, mean))) %>%
-      do.call(rbind, .) %>%
-      add_n_ahead() %>%
+      get_mean_forecast() %>%
       dplyr::filter(n %in% c(1, 7, 14, 21)) %>%
       mutate(n = factor(as.character(n), levels = c("1", "7", "14", "21"))) %>%
+      mutate(state_id = tolower(ctry)) %>%
       comp_inc(cori) %>%
-      rename(target = inc, date = test_date) %>%
+      rename(target = incidence) %>%
       dplyr::select(date, target, n, models) %>%
+      mutate_at(models, ~ ifelse(. > max_inc, max_inc, .)) %>%
       reshape2::melt(c("date", "n")) %>%
       plot_predict(interval = F) +
-      scale_y_continuous(limits = c(0, 300)) +
+      scale_y_continuous(limits = c(0, max_inc), expand = c(0,0)) +
       labs(y = "Incidence (per 100,000 population)",
            color = "Number of days forecasted ahead",
            title = ctry, 
@@ -102,12 +118,11 @@ dev.off()
 ```{r}
 mean10 <- do.call(rbind, lapply(files, function(f) {
   read_files(f) %>%
-    lapply(., function(X) mutate_at(X, vars(models), ~ apply(., 1, mean))) %>%
-    do.call(rbind, .) %>%
-    add_n_ahead() %>%
+    get_mean_forecast() %>%
     dplyr::filter(n == n_ahead) %>%
+    mutate(state_id = tolower(gsub(".rds", "", basename(f)))) %>%
     comp_inc(cori) %>%
-    rename(target = inc, date = test_date, id = state_id) %>%
+    rename(target = incidence, id = state_id) %>%
     dplyr::select(id, date, target, models) %>%
     melt(measure.vars = c("target", models)) %>%
     group_by(id, variable) %>%
@@ -116,11 +131,12 @@ mean10 <- do.call(rbind, lapply(files, function(f) {
     na.omit()
 }))
 
-mean10_pl <- ggplot(mean10, mapping = aes(x = date, y = value, color = variable)) +
+mean10_pl <- mean10 %>% mutate(value = ifelse(value > max_inc, max_inc, value)) %>%
+  ggplot(mapping = aes(x = date, y = value, color = variable)) +
   facet_wrap(~ id, ncol = 3, scales = "free_x") +
   geom_line(alpha = .5) +
   scale_color_manual(values = c("black", mcols)) +
-  scale_y_continuous(limits = c(0, 300), expand = c(0,0)) +
+  scale_y_continuous(limits = c(0, max_inc), expand = c(0,0)) +
   scale_x_date(date_breaks = "1 month") +
   theme_bw2() +
   theme(axis.title.x = element_blank(), legend.position = "top",
@@ -132,7 +148,7 @@ mean10_pl <- ggplot(mean10, mapping = aes(x = date, y = value, color = variable)
 
 mean10_pl
 
-save_plot(mean10_pl, "results/ts_mean10.pdf", w = 21, h = 28)
+save_plot(mean10_pl, "results/ts_mean10.png", w = 21, h = 21)
 ```
 
 
@@ -145,14 +161,16 @@ save_plot(mean10_pl, "results/ts_mean10.pdf", w = 21, h = 28)
 df_pCalib <- do.call(rbind, map(files, function(f) {
   print(sprintf("Processing file %s", f))
   read_files(f) %>%
+    add_n_ahead() %>%
+    .$data %>%
+    lapply(., function(X) mutate(X, state_id = tolower(gsub(".rds", "", basename(f))))) %>%
     lapply(., function(X) comp_inc(X, cori)) %>%
-    lapply(., function(X) cbind(dplyr::select(X, state_id, forecast_date, test_date, inc), 
-                                sapply(models, function(m) pred_score(X[[m]], X$inc, type = "calibration")))) %>%
+    lapply(., function(X) cbind(dplyr::select(X, state_id, date, n, incidence), 
+                                sapply(models, function(m) pred_score(X[[m]], X$incidence, type = "calibration")))) %>%
     do.call(rbind, .)
 }))
 
 pCalib_pl <- df_pCalib %>%
-  add_n_ahead() %>%
   mutate(n = cut(n, breaks = n_brks, labels = n_lbs)) %>%
   dplyr::select(n, models) %>%
   reshape2::melt("n") %>%
@@ -168,7 +186,7 @@ pCalib_pl <- df_pCalib %>%
 
 pCalib_pl
 
-save_plot(pCalib_pl, "results/calibration_probabilistic.pdf", w = 21, h = 21)
+save_plot(pCalib_pl, "results/calibration_probabilistic.png", w = 21, h = 21)
 ```
 
 
@@ -176,12 +194,13 @@ save_plot(pCalib_pl, "results/calibration_probabilistic.pdf", w = 21, h = 21)
 
 ```{r}
 Gx <- df_pCalib %>%
-  group_by(state_id, test_date) %>% 
+  group_by(state_id, date) %>% 
   slice(1) %>%
   ungroup() %>%
   group_by(state_id) %>%
-  mutate(Gx = ecdf(.$inc)(inc)) %>%
-  ungroup() 
+  mutate(Gx = ecdf(incidence)(incidence)) %>%
+  ungroup() %>%
+  dplyr::select(state_id, date, Gx)
 
 df_mCalib <- df_pCalib %>%
   left_join(Gx) %>%
@@ -197,10 +216,11 @@ df_mCalib <- df_pCalib %>%
 mCalib_pl <- df_mCalib %>%
   ggplot(aes(x = incidence, y = value, color = variable)) +
   geom_line() +
+  geom_point() +
   facet_wrap(~ n, ncol = 3) +
   geom_hline(aes(yintercept = 0), linetype = "dotted") +
   scale_color_brewer(palette = "Dark2") +
-  scale_x_continuous(breaks = inc_small_brks) +
+  scale_x_continuous(breaks = inc_small_brks, limits = c(10, 160), expand = c(0,0)) +
   labs(x = "Threshold of incidence (new cases per 100,000 people)", 
        y = "Average predictive CDF - Average empirical CDF",
        title = "Probabilistic Calibration",
@@ -210,44 +230,41 @@ mCalib_pl <- df_mCalib %>%
         legend.title = element_blank(),
         legend.justification = "left") 
 
-save_plot(mCalib_pl, "results/calibration_marginal.pdf", w = 21, h = 10)
+mCalib_pl
+
+save_plot(mCalib_pl, "results/calibration_marginal.png", w = 21, h = 10)
 ```
 
 
 ## Sharpness
 
 ```{r}
+qq <- 0.25
+qq_name <- "50"
 df_sharp <- do.call(rbind, map(files, function(f) {
   print(sprintf("Processing file %s", f))
-  read_files(f) %>%
-    lapply(., function(X) comp_inc(X, cori)) %>%
-    lapply(., function(X) cbind(dplyr::select(X, state_id, forecast_date, test_date, inc), 
-                                sapply(models, function(m) pred_score(X[[m]], X$inc, type = "sharpness", q = .25)) %>% 
-                                  set_names(paste0(models, "_Q50")),
-                                sapply(models, function(m) pred_score(X[[m]], X$inc, type = "sharpness", q = .05)) %>% 
-                                  set_names(paste0(models, "_Q90")))) %>%
-    do.call(rbind, .)
+  read_files(f) %>% add_pred_score(f, models = models, type = "sharpness", q = qq)
 }))
 
 sharp_pl <- df_sharp %>%
-  add_n_ahead() %>%
-  mutate(n = cut(n, breaks = n_brks, labels = n_lbs)) %>%
-  dplyr::select(-forecast_date, -test_date, -inc) %>%
-  melt(c("state_id", "n")) %>%
-  mutate(cri = factor(stringi::stri_extract(variable, regex = "Q\\d{2}"), levels = c("Q50", "Q90"))) %>%
-  mutate(variable = factor(gsub("_Q\\d{2}", "", variable), levels = models)) %>%
-  ggplot(aes(x = cri, y = value)) +
-  facet_wrap(~ variable + n, ncol = length(n_brks)-1) +
-  geom_boxplot() +
-  labs(x = "Q%-Credible interval", 
-       y = "Size of interval (incidence)",
+  dplyr::select(n, models) %>%
+  melt("n") %>%
+  group_by(n, variable) %>%
+  summarize(value = mean(value)) %>%
+  ungroup() %>%
+  ggplot(aes(x = n, y = value, color = variable)) +
+  geom_line() +
+  geom_point() +
+  labs(x = "Number of days forecasted ahead", 
+       y = paste0("Size of ", qq_name, "% credible interval (incidence in cases per 100,000 population)"),
        title = "Sharpness",
-       subtitle = "Size of Q%-credible interval by method and N-day ahead forecast") +
-  theme_bw2()
+       subtitle = paste0("Average size of ", qq_name, "%-credible interval by method and N-day ahead forecast")) +
+  theme_bw2() +
+  theme(legend.title = element_blank())
 
 sharp_pl
 
-save_plot(sharp_pl, "results/sharpness.pdf", w = 21, h = 21)
+save_plot(sharp_pl, paste0("results/sharpness_q", qq_name, ".png"), w = 21, h = 21)
 ```
 
 
@@ -256,19 +273,17 @@ save_plot(sharp_pl, "results/sharpness.pdf", w = 21, h = 21)
 ```{r}
 df_ps <- do.call(rbind, map(files, function(f) {
   print(sprintf("Processing file %s", f))
-  read_files(f) %>% add_pred_score(models = models, type = "crps")
+  read_files(f) %>% add_pred_score(f, models = models, type = "crps")
 }))
 
 crps_pl <- df_ps %>%
   plot_score(models = models, model_colors = mcols) +
   labs(y = "Score", x = "Models",
        title = "CRPS",
-       subtitle = "Boxplot of average country scores") +
+       subtitle = "CRPS across states (AZ, CA, IL, MD, NJ, NY)") +
   theme_bw2()
 
 crps_pl
-
-save_plot(crps_pl, "results/crps.pdf", w = 21, h = 14)
 ```
 
 ### Censored
@@ -276,55 +291,60 @@ save_plot(crps_pl, "results/crps.pdf", w = 21, h = 14)
 ```{r}
 df_cens_ps <- do.call(rbind, map(files, function(f) {
   print(sprintf("Processing file %s", f))
-  read_files(f) %>% add_pred_score(models = models, type = "crps", trans = function(x) {x[x>300] <- 300; return(x)})
+  read_files(f) %>% add_pred_score(f, models = models, type = "crps", trans = function(x) {x[x>max_inc] <- max_inc; return(x)})
 }))
 
 cens_crps_pl <- df_cens_ps %>%
   plot_score(models = models, model_colors = mcols) +
   labs(y = "Score", x = "Models",
        title = "Censored CRPS",
-       subtitle = "Boxplot of average country scores") +
+       subtitle = "Censored CRPS across states (AZ, CA, IL, MD, NJ, NY)") +
   theme_bw2()
 
 cens_crps_pl
-
-save_plot(cens_crps_pl, "results/censored_crps.pdf", w = 21, h = 14)
 ```
 
 #### By N
 
 ```{r}
 crps_by_n_pl <- df_cens_ps %>%
-  add_n_ahead() %>%
-  mutate(group = cut(n, breaks = n_brks, labels = n_lbs)) %>%
-  plot_score(models = models, model_colors = mcols) +
-  labs(y = "Score", x = "Model",
-       title = "CRPS",
-       subtitle = "Boxplot of average country scores by n-day ahead forecast") +
+  dplyr::select(c("n", models)) %>%
+  melt(c("n")) %>%
+  group_by(n, variable) %>%
+  summarize(mean_score = mean(value)) %>%
+  ungroup() %>%
+  mutate(variable = factor(variable, levels = models)) %>%
+  ggplot(aes(x = n, y = mean_score, color = variable)) +
+  geom_line() +
+  geom_point() +
+  scale_y_continuous(expand = c(0,0), limits = c(0, NA)) +
+  scale_x_continuous(expand = c(0,0)) +
+  scale_color_manual(values = mcols) +
+  labs(y = "Score", x = "Number of days forecasted ahead",
+       title = "CRPS by n",
+       subtitle = "Average censored CRPS by n-day ahead forecast across states (AZ, CA, IL, MD, NJ, NY)") +
   theme_bw2()
 
 crps_by_n_pl
 
-save_plot(crps_by_n_pl, "results/crps_by_n.pdf", w = 21, h = 14)
+save_plot(crps_by_n_pl, "results/crps_by_n.png", w = 21, h = 14)
 ```
 
 #### By phase
 
 ```{r}
-phases <- read_csv("predictions/phase-labeling.csv")
-
 which_phase <- function(id, date) {
-  sub <- phases %>%
-    dplyr::filter(state == id) %>%
-    dplyr::filter(date > start) %>%
-    dplyr::filter(date <= end)
-  return(sub$label)
+  date <- ifelse(date == "2021-03-15", as.Date("2021-03-14"), date)
+  sub <- phase_labs %>%
+    dplyr::filter(state == toupper(id)) %>%
+    dplyr::filter(date >= start_date) %>%
+    dplyr::filter(date < end_date)
+  return(sub$epidemic_phase)
 }
   
 crps_by_phase <- df_cens_ps %>%
-  add_n_ahead() %>%
   rowwise() %>%
-  mutate(phase = which_phase(state_id, test_date))
+  mutate(phase = which_phase(state_id, date))
 
 crps_by_phase_pl <- crps_by_phase %>%
   dplyr::select(c("n", "phase", models)) %>%
@@ -333,25 +353,57 @@ crps_by_phase_pl <- crps_by_phase %>%
   summarize(mean_score = mean(value)) %>%
   ungroup() %>%
   mutate(variable = factor(variable, levels = models)) %>%
-  mutate(phase = ifelse(phase == "I", "Increase", 
-                        ifelse(phase == "D", "Decrease", 
-                               ifelse(phase == "F", "Flat", "Peak-change")))) %>%
-  mutate(phase = factor(phase, levels = c("Increase", "Peak-change", "Decrease", "Flat"))) %>%
   ggplot(aes(x = n, y = mean_score, color = variable)) +
   facet_wrap(~ phase) +
   geom_line() +
+  geom_point() +
   scale_y_continuous(expand = c(0,0), limits = c(0, NA)) +
+  scale_x_continuous(expand = c(0,0)) +
   scale_color_manual(values = mcols) +
   labs(y = "Score", x = "Number of days forecasted ahead",
        title = "CRPS by epidemic phase",
-       subtitle = "Average CRPS by phase from five US states (AK, AL, AR, AZ, CA)") +
+       subtitle = "Average censored CRPS by epidemic phase across states (AK, AL, AR, AZ, CA)") +
   theme_bw2() 
   
 
 crps_by_phase_pl
 
-save_plot(crps_by_phase_pl, "results/crps_by_phase.pdf", w = 21, h = 14)
+save_plot(crps_by_phase_pl, "results/crps_by_phase.png", w = 21, h = 14)
 ```
+
+#### Till 1st peak
+
+```{r}
+first_peak <- data.frame(
+  state_id = tolower(c("NY","NJ")),
+  date = as.Date(c("2020-04-07","2020-04-10"))
+)
+
+crps_first_peak_pl <- df_cens_ps %>%
+  dplyr::filter((state_id == first_peak$state_id[1] & date <= first_peak$date[1]) | 
+                  (state_id == first_peak$state_id[2] & date <= first_peak$date[2]))  %>%
+  dplyr::select(c("n", models)) %>%
+  melt(c("n")) %>%
+  group_by(n, variable) %>%
+  summarize(mean_score = mean(value)) %>%
+  ungroup() %>%
+  mutate(variable = factor(variable, levels = models)) %>%
+  ggplot(aes(x = n, y = mean_score, color = variable)) +
+  geom_line() +
+  geom_point() +
+  scale_y_continuous(expand = c(0,0), limits = c(0, NA)) +
+  scale_x_continuous(expand = c(0,0)) +
+  scale_color_manual(values = mcols) +
+  labs(y = "Score", x = "Number of days forecasted ahead",
+       title = "CRPS until first peak",
+       subtitle = "Average censored CRPS until first peak across two states (NJ, NY)") +
+  theme_bw2() 
+
+crps_first_peak_pl
+
+save_plot(crps_first_peak_pl, "results/crps_until_first_peak.png", w = 10, h = 8)
+```
+
 
 ### Weighted
 
@@ -366,9 +418,8 @@ w <- WM %>%
 plot(w, xlab = "Days ahead", ylab = "Weight", type = "b")
 
 df_ps_weighted <- df_cens_ps %>%
-  add_n_ahead() %>%
   mutate_at(vars(models), ~ . * w[n]) %>%
-  group_by(state_id, forecast_date) %>%
+  group_by(state_id, date) %>%
   summarize_at(vars(models), ~ sum(.)) %>%
   ungroup()
 
@@ -376,12 +427,10 @@ crps_weighted_pl <- df_ps_weighted %>%
   plot_score(models = models, model_colors = mcols) +
   theme_bw2() +
   labs(y = "Score", x = "Model",
-       title = "Censored weighted CRPS",
-       subtitle = "Boxplot of average country scores") 
+       title = "Weighted censored CRPS",
+       subtitle = "Weighted censored CRPS across states (AK, AL, AR, AZ, CA)") 
   
 crps_weighted_pl
-
-save_plot(crps_weighted_pl, "results/weighted_crps.pdf", w = 21, h = 14)
 ```
 
 ### Asymmetry 
@@ -400,34 +449,52 @@ plot(x = seq(0, 1, .01), y = 1 * sapply(seq(0, 1, .01), bias_weight), type = "b"
 
 df_pb <- do.call(rbind, map(files, function(f) {
   print(sprintf("Processing file %s", f))
-  read_files(f) %>% add_pred_score(models = models, type = "bias")
+  read_files(f) %>% add_pred_score(f, models = models, type = "bias")
 }))
 
 df_cens_ps_pb <- df_cens_ps
 df_cens_ps_pb[ ,models] <- df_cens_ps_pb[ ,models] * apply(df_pb[ ,models], c(1,2), bias_weight)
 df_cens_ps_pb_weighted <- df_cens_ps_pb %>%
-  add_n_ahead() %>%
   mutate_at(vars(models), ~ . * w[n]) %>%
-  group_by(state_id, forecast_date) %>%
+  group_by(state_id, date) %>%
   summarize_at(vars(models), ~ sum(.)) %>%
   ungroup()
 
 crps_asym_pl <- df_cens_ps_pb_weighted %>%
   plot_score(models = models, model_colors = mcols) +
   labs(y = "Score", x = "Model",
-       title = "Censored weighted asymmetric CRPS",
-       subtitle = "Boxplot of average country scores") +
+       title = "Weighted asymmetric censored CRPS",
+       subtitle = "Weighted asymmetric censored CRPS across states (AK, AL, AR, AZ, CA)") +
   theme_bw2()
 
 crps_asym_pl
-
-save_plot(crps_asym_pl, "results/crps_weighted_asym.pdf", w = 21, h = 14)
 ```
 
 ```{r}
 all_crps_pl <- grid.arrange(crps_pl, cens_crps_pl, crps_weighted_pl, crps_asym_pl, ncol = 2)
-save_plot(all_crps_pl, "results/crps_comparison.pdf", w = 20, h = 20)
-save_plot(all_crps_pl, "results/crps_comparison.png", w = 20, h = 12)
+save_plot(all_crps_pl, "results/crps_comparison.png", w = 24, h = 18)
+```
+
+#### Over time
+
+```{r}
+crps_over_time_pl <- df_cens_ps_pb_weighted %>%
+  mutate_at(vars(models), ~ zoo::rollmean(., k = 7, fill = NA, align = "center")) %>%
+  na.omit() %>%
+  melt(c("state_id", "date")) %>%
+  ggplot(aes(x = date, y = value, color = variable)) +
+  facet_wrap(~ state_id) +
+  geom_line() +
+  scale_x_date(expand = c(0,0)) +
+  labs(y = "Score", x = "Date",
+       title = "CRPS over time",
+       subtitle = "Weighted asymmetric censored CRPS over time by state and model") +
+  theme_bw2() +
+  theme(legend.title = element_blank())
+
+crps_over_time_pl
+
+save_plot(crps_over_time_pl, "results/crps_over_time.png", w = 24, h = 18)
 ```
 
 
@@ -519,21 +586,22 @@ save_plot(all_crps_pl, "results/crps_comparison.png", w = 20, h = 12)
 df_hot <- do.call(rbind, map(files, function(f) {
   # read file
   print(sprintf("Processing file %s", f))
-  df <- read_files(f) 
+  df <- read_files(f) %>%
+    dplyr::filter(sapply(data, nrow) == 21)
   
   # compute hotspot probabilities and create list from matrix
   prob_hot <- lapply(models, function(m) {
-    P <- sapply(df, function(X) p_hotspot(X[[m]])) 
+    P <- sapply(df$data, function(X) p_hotspot(X[[m]])) 
     lapply(seq_len(ncol(P)), function(i) P[ ,i]) })
   names(prob_hot) <- models
   
   # determine true (if hotspot) and create list from matrix
-  hot <- sapply(df, function(X) is_hotspot(X$inc))
+  hot <- sapply(df$data, function(X) is_hotspot(X$incidence))
   prob_hot$hot <- lapply(seq_len(ncol(hot)), function(i) hot[ ,i])
   
   # add state_id and n to list
-  prob_hot$n <- lapply(1:length(df), function(x) 1:nrow(hot) + 7)
-  prob_hot$state_id <- df[[1]]$state_id[1]
+  prob_hot$n <- lapply(1:length(df$data), function(x) 1:nrow(hot) + 7)
+  prob_hot$state_id <- df$state[1]
   
   # combine to long dataframe
   prob_hot <- unnest(as_data_frame(prob_hot), c("n", "hot", models)) 
@@ -561,7 +629,6 @@ df_hot_pl <- df_hot %>%
   
 df_hot_pl
 
-save_plot(df_hot_pl, "results/hotspot.pdf", w = 20, h = 14)
 save_plot(df_hot_pl, "results/hotspot.png", w = 20, h = 12)
 ```
 
