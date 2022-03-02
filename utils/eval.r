@@ -117,6 +117,21 @@ pred_score <- function(
   
 }
 
+# summarize prediction score by day or week
+summarize_score_by_n <- function(df, fct, week = F) {
+  if (week) {
+    df <- df %>% mutate(n = cut(n, breaks = n_brks, labels = n_lbs))
+  }
+  df <- df %>%
+    dplyr::select(n, models) %>%
+    melt("n") %>%
+    group_by(n, variable) %>%
+    summarize(value = fct(value)) %>%
+    ungroup() %>%
+    mutate(variable = recode(variable, !!! model_names))
+  return(df)
+}
+
 
 is_hotspot <- function(y, q = .25, min_inc = 10) {
   n <- length(y)
@@ -177,6 +192,7 @@ plot_predict <- function(
       stat_lineribbon(data = dat_pred, .width = c(.95, .8, .5), color = "#08519C") +
       geom_line(data = dat_obse, size = 1) +
       scale_fill_brewer() +
+      scale_x_date(expand = c(0,0), breaks = "2 months", date_labels = "%b %y") +
       facet_wrap(~ variable, ncol = 2) +
       theme_bw2() +
       theme(axis.title.x = element_blank())
@@ -189,6 +205,7 @@ plot_predict <- function(
       geom_line(data = dat_obse, color = "black") +
       facet_wrap(~ variable, ncol = 2) +
       scale_color_viridis_d() +
+      scale_x_date(expand = c(0,0), breaks = "2 months", date_labels = "%b %y") +
       theme_bw2() +
       theme(axis.title.x = element_blank())
     

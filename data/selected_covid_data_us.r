@@ -103,6 +103,11 @@ df_sel_us_sm %>%
 
 
 # labeled plot
+states <- toupper(c("az","ca","il","md","nj","ny"))
+state_names <- c("Arizona", "California", "Illinois", 
+                 "Maryland", "New Jersey", "New York")
+names(state_names) <- states
+
 phase_labs <- read_csv("data/us-selected-states_labeled-phases.csv") %>%
   rename(start_date = date) %>%
   group_by(state) %>%
@@ -111,18 +116,27 @@ phase_labs <- read_csv("data/us-selected-states_labeled-phases.csv") %>%
   ungroup() %>%
   mutate(end_date = ifelse(is.na(end_date), "2021-03-15", end_date)) %>%
   mutate(end_date = as.Date(end_date)) %>%
-  mutate(epidemic_phase = factor(epidemic_phase, levels = c(c("exponential growth", "subexponential growth", "plateau", "subexponential decline", "exponential decline"))))
+  mutate(epidemic_phase = firstup(epidemic_phase)) %>%
+  mutate(epidemic_phase = factor(epidemic_phase, levels = c(c("Exponential growth", "Subexponential growth", "Plateau", 
+                                                              "Subexponential decline", "Exponential decline")))) %>%
+  mutate(state = recode(state, !!! state_names))
 
 
 phases_pl <- ggplot() +
     facet_wrap(~ state) +
-    geom_line(data = df_sel_us_sm, mapping = aes(x = date, y = incidence_7d)) +
-    geom_rect(data = phase_labs, mapping = aes(xmin = start_date, xmax = end_date, ymin = -Inf, ymax = Inf, fill = epidemic_phase), alpha = .5) +
+    geom_rect(data = phase_labs, mapping = aes(xmin = start_date, xmax = end_date, ymin = -Inf, ymax = Inf, fill = epidemic_phase), 
+            alpha = .5) +
+    geom_line(data = df_sel_us_sm %>% mutate(state = recode(state, !!! state_names)), mapping = aes(x = date, y = incidence_7d)) +
     scale_y_continuous(expand = c(0,0)) +
-    scale_x_date(expand = c(0,0), breaks = "2 weeks") +
+    scale_x_date(expand = c(0,0), breaks = "1 months", date_labels = "%b %y") +
     scale_fill_brewer(palette = "RdBu") +
     labs(y = "Incidence (new cases per 100,000 population)", x = "", fill = "Epidemic phase") +
     theme_bw2() +
-    theme(legend.position = "bottom", axis.text.x = element_text(angle = 90))
-save_plot(phases_pl, "data/us-selected-states_phases_plot.pdf", w = 30, h = 15)
+    theme(legend.position = "bottom", axis.text.x = element_text(angle = 90, hjust = 1), legend.title = element_blank()) +
+    guides(fill = guide_legend(override.aes = list(colour = "gray")))
+
+phases_pl
+
+save_plot(phases_pl, "data/us-selected-states_phases_plot.png", w = 16, h = 12)
+save_plot(phases_pl, "data/us-selected-states_phases_plot.pdf", w = 16, h = 12)
 

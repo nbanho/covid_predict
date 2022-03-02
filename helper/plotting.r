@@ -20,6 +20,8 @@ theme_bw2 <- function () {
       plot.title = element_text(size = text_size, face = "bold", hjust = 0, margin = ggplot2::margin(0, 0, 5, 0)),
       plot.subtitle = element_text(size = text_size, hjust = 0, margin = ggplot2::margin(0, 0, 5, 0)),
       plot.caption = element_text(size = text_size - 2, hjust = 1, margin = ggplot2::margin(5, 0, 0, 0)),
+      plot.margin = unit(c(0.25,.5,0.25,0.25), "cm"),
+      panel.spacing = unit(1, "lines"),
       legend.position = "top", 
       legend.justification = "left"
     )
@@ -97,4 +99,13 @@ label_facet <- function(original_var, custom_name){
   lab <- paste0(custom_name, ": ", lev)
   names(lab) <- lev
   return(lab)  
+}
+
+
+#' Make first letter upper case
+#' @param x string
+#' 
+firstup <- function(x) {
+  substr(x, 1, 1) <- toupper(substr(x, 1, 1))
+  x
 }
