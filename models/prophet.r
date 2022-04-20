@@ -2,6 +2,7 @@ library(prophet)
 
 train.prophet <- function(
   dsy, # df with date column (ds) and time series (y) 
+  cp_scale = 0.25, # value for the change point prior scale
   cap = NULL, # upper limit
   floor = NULL, # lower limit
   weekly = T, # consider weekly seasonality
@@ -29,13 +30,13 @@ train.prophet <- function(
   if (weekly) {
     fit <- prophet(dsy, 
                    growth = gr,
-                   changepoint.range = cpr, n.changepoints = nc, changepoint.prior.scale = 0.25,
+                   changepoint.range = cpr, n.changepoints = nc, changepoint.prior.scale = cp_scale,
                    yearly.seasonality = F, weekly.seasonality = 'auto', daily.seasonality = F, seasonality.mode = "multiplicative",
                    ...)  
   } else {
     fit <- prophet(dsy, 
                    growth = gr,
-                   changepoint.range = cpr, n.changepoints = nc, changepoint.prior.scale = 0.25,
+                   changepoint.range = cpr, n.changepoints = nc, changepoint.prior.scale = cp_scale,
                    yearly.seasonality = F, weekly.seasonality = F, daily.seasonality = F,
                    ...)  
   }
