@@ -26,12 +26,12 @@ n_chains <- 4
 
 # get samples
 get_samples <- function(DM, TM, k, ns = n_draws, np = n_preds) {
-  DM <- DM[ ,1:n_draws]
-  DM <- matrix(DM, ncol = n_draws)
+  DM <- DM[ ,1:ns]
+  DM <- matrix(DM, ncol = ns)
   n <- nrow(TM)
-  if (k < n_preds) {
+  if (k < np) {
     return(tail(DM,k))
-  } else if (n == n_preds) {
+  } else if (n == np) {
     return(DM)
   } else {
     return(head(DM,n))
