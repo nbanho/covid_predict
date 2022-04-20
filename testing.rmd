@@ -15,11 +15,13 @@ library(tidyverse)
 library(tidybayes)
 library(lubridate)
 
+# helper functions
+source("helper/prep.r")
+
 # default settings
 source("settings/defaults.r")
 
 # train and predict utils
-source("utils/transform.r")
 source("utils/diagnostics.r")
 
 # delays
@@ -52,36 +54,7 @@ source("models/prophet.r")
 ## Data
 
 ```{r}
-# all data
-df <- read_csv("data/prep_jhu_all_countries.csv") %>%
-    dplyr::filter(id %in% c("AUT", "BEL", "BGR", "CHE", "HRV", "CZE", "DNK", "EST", 
-                            "FIN", "FRA", "DEU", "GRC", "HUN", "IRL", "ITA", "LVA",
-                            "LTU", "NLD", "POL", "PRT", "ROU", "SVK",
-                            "SVN", "ESP", "SWE", "GBR"))
-
-# country to test loop
-countries <- c("DEU")
-```
-
-### New cases
-
-```{r}
-df %>% 
-  dplyr::filter(date <= "2020-05-01") %>%
-  ggplot(aes(x = date, y = new_confirmed)) +
-  geom_line() +
-  facet_wrap(~ id, scales = "free_y")
-```
-
-### Determine cap
-
-```{r}
-df %>%
-  group_by(id) %>%
-  summarize(m = max(new_confirmed) / population[1] * 1e5) %>%
-  ungroup() %>%
-  ggplot(aes(x = id, y = m)) +
-  geom_bar(stat = "identity")
+df <- readRDS("data/us-selected-states_ts-date.rds")
 ```
 
 ## EpiEstim 
@@ -105,17 +78,19 @@ df %>%
 #     seed = 1)
 config_si <- make_config(
   method = "non_parametric_si",
+  t_start = seq(2,56-14+1,1),
+  t_end = seq(15,56,1),
   si_distr = vp(xT = 10, from0 = F, FUN = p_g))
 
 # data
 data <- df %>%
-  dplyr::filter(id == "AUT") %>%
+  dplyr::filter(state == "NY") %>%
   arrange(date) %>%
-  slice(1:90)
+  slice(30:(30+56-1))
 
 # Estimate R
 est_R <- estimate_R(
-  incid = data$new_confirmed,
+  incid = data$cases,
   method = "non_parametric_si",
   config = config_si)
 
@@ -152,11 +127,38 @@ ggplot(mapping = aes(x = date)) +
 ### Test functions
 
 ```{r}
+# data
+data <- df %>%
+  dplyr::filter(state == "NY") %>%
+  arrange(date) %>%
+  slice(30:(30+56-1))
+
 # train
-cori.fit <- train.cori(data$new_confirmed)
+cori.fit7 <- train.cori(data$cases, tau = 7)
+plot(cori.fit7$eR)
+cori.fit14 <- train.cori(data$cases, tau = 14)
+plot(cori.fit14$eR)
+cori.fit21 <- train.cori(data$cases, tau = 21)
+plot(cori.fit21$eR)
 
 # predict
-cori.proj <- predict.cori(estimate_R_obj = cori.fit)
+cori.proj7 <- predict.cori(estimate_R_obj = cori.fit7)
+cori.proj14 <- predict.cori(estimate_R_obj = cori.fit14)
+cori.proj21 <- predict.cori(estimate_R_obj = cori.fit21)
+
+# compare
+# combine data
+cori_proj <- rbind(mat_to_long(cori.proj7, "cori-7"), 
+                   mat_to_long(cori.proj14, "cori-14"), 
+                   mat_to_long(cori.proj21, "cori-21"))  %>%
+  mutate(var = factor(var, levels = c("cori-7", "cori-14", "cori-21")))
+  
+
+# plot
+ggplot(cori_proj, aes(x = key, y = value)) +
+  facet_wrap(~ var) +
+  stat_lineribbon()
+
 ```
 
 ### Train & Pred
@@ -487,20 +489,34 @@ plot(m, forecast) + add_changepoints_to_plot(m)
 ### Test functions
 
 ```{r}
-deu_first200 <- df %>%
-  dplyr::filter(id == "DEU") %>%
-  slice(1:200) %>%
-  dplyr::select(date, new_confirmed) %>%
-  set_names(c("ds", "y"))
-fit_first200 <- train.prophet(deu_first200)
+# data
+data <- df %>%
+  dplyr::filter(state == "NY") %>%
+  arrange(date) %>%
+  slice(30:(30+56-1)) %>%
+  rename(ds = date) %>%
+  mutate(y = log1p(incidence)) %>%
+  dplyr::select(ds, y)
+
+# train
+prophet0.10 <- train.prophet(data, cp_scale = 0.10)
+prophet0.25 <- train.prophet(data, cp_scale = 0.25)
+prophet0.40 <- train.prophet(data, cp_scale = 0.40)
 
 # predict
-deu_pred <- predict.prophet(fit_first200)
-deu_first221 <- df %>%
-  dplyr::filter(id == "DEU") %>%
-  slice(1:221) %>%
-  dplyr::select(date, new_confirmed)
-plot.predict(deu_first221$date, deu_first221$new_confirmed, deu_pred)
+pred_prophet0.10 <- predict.prophet(prophet0.10)
+pred_prophet0.25 <- predict.prophet(prophet0.25)
+pred_prophet0.40 <- predict.prophet(prophet0.40)
+
+# plot 
+dat_test <- df %>%
+  dplyr::filter(state == "NY") %>%
+  arrange(date) %>%
+  slice(30:(30+56-1+21)) %>%
+  mutate(y = log1p(incidence))
+plot.predict(dat_test$date, dat_test$y, pred_prophet0.10)
+plot.predict(dat_test$date, dat_test$y, pred_prophet0.25)
+plot.predict(dat_test$date, dat_test$y, pred_prophet0.40)
 ```
 
 ## Gaussian Process
@@ -532,25 +548,23 @@ prior_draws %>%
   geom_line()
 
 # train data
-df_deu <- df %>% dplyr::filter(id == "DEU") %>% arrange(date)
-n0 <- 241
-n <- 330
+df_deu <- df %>% dplyr::filter(state == "NY") %>% arrange(date)
+n0 <- 30
+n <- n0+56
 data <- df %>%
-  dplyr::filter(id == "DEU") %>%
+  dplyr::filter(state == "NY") %>%
   slice(n0:n) %>%
   mutate(x = n0:n) %>%
-  mutate(inc = trans(new_confirmed, population, transfct = NULL)) %>%
-  mutate(log_inc = trans(new_confirmed, population))
+  mutate(log_inc = log1p(incidence))
 
 plot(data$log_inc, type = "b")
 
 # test data
 test_data <- df %>%
-  dplyr::filter(id == "DEU") %>%
+  dplyr::filter(state == "NY") %>%
   slice((n+1):(n+21)) %>%
   mutate(x = (n+1):(n+21)) %>%
-  mutate(inc = trans(new_confirmed, population, transfct = NULL)) %>%
-  mutate(log_inc = trans(new_confirmed, population))
+  mutate(log_inc = log1p(incidence))
 
 data_list <- list(N1 = nrow(data), 
                   N2 = (n-n0+1)+21,
@@ -559,11 +573,13 @@ data_list <- list(N1 = nrow(data),
                   x2 = c(data$x, test_data$x))
 
 # train
-gamma_prior_param <- stan("models/tune_inv_gamma_prior.stan", data = list(l = 7, u = (n-n0+1)),
-                          iter = 1, warmup = 0, chains = 1, seed = 123213, algorithm = "Fixed_param")
-data_list$rho1_shape = summary(gamma_prior_param)$summary["shape",1]
-data_list$rho1_scale = summary(gamma_prior_param)$summary["scale",1]
-gp_mod <- cmdstan_model("models/gp.stan")
+# gamma_prior_param <- stan("models/tune_inv_gamma_prior.stan", data = list(l = 7, u = (n-n0+1)),
+#                           iter = 1, warmup = 0, chains = 1, seed = 123213, algorithm = "Fixed_param")
+# data_list$rho1_shape = summary(gamma_prior_param)$summary["shape",1]
+# data_list$rho1_scale = summary(gamma_prior_param)$summary["scale",1]
+data_list$rho1_shape = 5.6
+data_list$rho1_scale = 87
+gp_mod <- cmdstan_model("models/gp2.stan")
 gp_mod_fit <- gp_mod$sample(
   data =  data_list,
   seed = 12345,
@@ -573,10 +589,10 @@ gp_mod_fit <- gp_mod$sample(
   iter_sampling = 500,
   save_warmup = T
 )
-gp_mod_fit$summary(c("sigma", "alpha0", "rho1", "alpha1", "alpha2"))
-np = nuts_params(gp_mod_fit)
-mcmc_pairs(gp_mod_fit$draws(c("rho1", "alpha0", "alpha1", "alpha2")), np = np)
-mcmc_trace(gp_mod_fit$draws(c("alpha1", "rho1", "sigma"), inc_warmup = T), n_warmup = 500)
+# gp_mod_fit$summary(c("sigma", "alpha0", "rho1", "alpha1", "alpha2"))
+# np = nuts_params(gp_mod_fit)
+# mcmc_pairs(gp_mod_fit$draws(c("rho1", "alpha0", "alpha1", "alpha2")), np = np)
+# mcmc_trace(gp_mod_fit$draws(c("alpha1", "rho1", "sigma"), inc_warmup = T), n_warmup = 500)
 
 ypred <- gp_mod_fit$draws("y2") %>%
   as_draws_df() %>%
@@ -587,11 +603,10 @@ ypred <- gp_mod_fit$draws("y2") %>%
   ungroup() %>%
   dplyr::select(-key) %>%
   rename(log_inc = value) %>%
-  mutate(new_confirmed = inv_trans(log_inc, data$population[1])) %>%
-  mutate(inc = trans(new_confirmed, data$population[1], transfct = NULL))
+  mutate(incidence = expm1(log_inc)) 
   
 
-ggplot(mapping = aes(x = x, y = inc)) +
+ggplot(mapping = aes(x = x, y = incidence)) +
   stat_lineribbon(data = ypred) +
   scale_fill_brewer() +
   geom_line(data = rbind(data, test_data), color = "red")
@@ -639,9 +654,9 @@ ggplot() +
 ```{r}
 # train data
 n0 <- 1
-n <- 90
+n <- 56
 data <- df %>%
-  dplyr::filter(id == "DEU") %>%
+  dplyr::filter(state == "NY") %>%
   slice(n0:n) %>%
   mutate(x = n0:n) %>%
   mutate(log_inc = trans(new_confirmed, population, transfct = function(x) log(x + 1)))
