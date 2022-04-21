@@ -58,7 +58,7 @@ run_prediction_us <- function() {
     }
     
     # save
-    saveRDS(test_df_state, paste0("predictions/experiment_prophet", state, ".rds"))
+    saveRDS(test_df_state, paste0("predictions/experiment_prophet/", state, ".rds"))
   }
   
 }
