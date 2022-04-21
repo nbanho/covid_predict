@@ -1,0 +1,121 @@
+---
+title: "Experiments"
+author: "Nicolas Banholzer"
+date: '2022-04-21'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Libraries
+
+```{r}
+# libraries
+library(tidyverse)
+library(reshape2)
+library(lubridate)
+library(grid)
+library(gridExtra)
+library(covidcast)
+
+# utils
+source("utils/eval.r")
+source("utils/delays.r")
+
+# helper
+source("helper/plotting.r")
+
+# settings
+max_inc = 300
+```
+
+## Cori
+
+### Data
+
+```{r}
+files_cori <- list.files("predictions/experiment_cori/", full.names = T)
+models_cori = c("cori7", "cori14", "cori21")
+```
+
+### Results
+
+```{r}
+# compute scores
+scores_cori <- do.call(rbind, map(files_cori, function(f) {
+  print(sprintf("Processing file %s", f))
+  read_files(f) %>% add_pred_score(f, models = models_cori, 
+                                   type = "crps", trans = function(x) {x[x>max_inc] <- max_inc; return(x)})
+}))
+
+# summarize scores
+scores_cori_sum <- scores_cori %>%
+  dplyr::select(n, models_cori) %>%
+  melt("n") %>%
+  group_by(n, variable) %>%
+  summarize(value = mean(value)) %>%
+  ungroup()
+
+# plot 
+scores_cori_sum %>%
+  ggplot(aes(x = n, y = value, color = variable)) +
+  geom_line() +
+  geom_point(shape = 1) +
+  scale_x_continuous(minor_breaks = seq(0,21,1), expand = c(0,0), breaks = c(1,7,14,21), limits = c(0.5,21.5)) +
+  scale_y_continuous(expand = c(0,0), limits = c(0,35)) +
+  labs(x = "Number of days forecasted ahead", 
+       y = "Average CRPS") +
+  theme_bw2() +
+  theme(legend.title = element_blank())
+```
+
+
+## Prophet
+
+### Data
+
+```{r}
+files_proph <- list.files("predictions/experiment_prophet/", full.names = T)
+models_proph = c("proph0.10", "proph0.25", "proph0.40")
+```
+
+### Results
+
+```{r}
+# compute scores
+scores_proph <- do.call(rbind, map(files_proph, function(f) {
+  print(sprintf("Processing file %s", f))
+  read_files(f) %>% add_pred_score(f, models = models_proph, 
+                                   type = "crps", trans = function(x) {x[x>max_inc] <- max_inc; return(x)})
+}))
+
+# summarize scores
+scores_proph_sum <- scores_proph %>%
+  dplyr::select(n, models_proph) %>%
+  melt("n") %>%
+  group_by(n, variable) %>%
+  summarize(value = mean(value)) %>%
+  ungroup()
+
+# plot 
+scores_proph_sum %>%
+  ggplot(aes(x = n, y = value, color = variable)) +
+  geom_line() +
+  geom_point(shape = 1) +
+  scale_x_continuous(minor_breaks = seq(0,21,1), expand = c(0,0), breaks = c(1,7,14,21), limits = c(0.5,21.5)) +
+  scale_y_continuous(expand = c(0,0), limits = c(0,35)) +
+  labs(x = "Number of days forecasted ahead", 
+       y = "Average CRPS") +
+  theme_bw2() +
+  theme(legend.title = element_blank())
+
+scores_proph_sum %>%
+  dplyr::filter(variable != "proph0.10") %>%
+  spread(variable, value) %>%
+  mutate(dp = proph0.25 - proph0.40) %>%
+  ggplot(aes(x = n, y = dp)) +
+  geom_hline(aes(yintercept = 0), linetype = "dashed") +
+  geom_line()
+```

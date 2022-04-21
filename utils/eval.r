@@ -70,7 +70,7 @@ add_pred_score <- function(D, f, models = models, ...) {
     add_n_ahead() %>%
     .$data %>%
     lapply(., function(X) mutate(X, state_id = tolower(gsub(".rds", "", basename(f))))) %>%
-    lapply(., function(X) comp_inc(X, cori)) %>%
+    lapply(., function(X) comp_inc(X, matches("cori"))) %>%
     lapply(., function(X) cbind(dplyr::select(X, state_id, date, n, incidence), 
                                 sapply(models, function(m) pred_score(X[[m]], X$incidence, ...)))) %>%
     do.call(rbind, .)
