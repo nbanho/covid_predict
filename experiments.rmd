@@ -19,6 +19,7 @@ library(lubridate)
 library(grid)
 library(gridExtra)
 library(covidcast)
+library(RColorBrewer)
 
 # utils
 source("utils/eval.r")
@@ -59,16 +60,20 @@ scores_cori_sum <- scores_cori %>%
   ungroup()
 
 # plot 
-scores_cori_sum %>%
+cori_pl <- scores_cori_sum %>%
   ggplot(aes(x = n, y = value, color = variable)) +
   geom_line() +
   geom_point(shape = 1) +
   scale_x_continuous(minor_breaks = seq(0,21,1), expand = c(0,0), breaks = c(1,7,14,21), limits = c(0.5,21.5)) +
   scale_y_continuous(expand = c(0,0), limits = c(0,35)) +
+  scale_color_manual(values = brewer.pal(9,"Greens")[rev(c(3,6,9))],
+                     labels = expression("EpiEstim("*tau*" = "*1*" week)","EpiEstim("*tau*" = "*2*" weeks)","EpiEstim("*tau*" = "*3*" weeks)")) +
   labs(x = "Number of days forecasted ahead", 
        y = "Average CRPS") +
   theme_bw2() +
   theme(legend.title = element_blank())
+
+save_plot(cori_pl, "results/experiments_cori.pdf", w = 12, h = 8)
 ```
 
 
@@ -100,22 +105,38 @@ scores_proph_sum <- scores_proph %>%
   ungroup()
 
 # plot 
-scores_proph_sum %>%
+prophet_pl <- scores_proph_sum %>%
   ggplot(aes(x = n, y = value, color = variable)) +
   geom_line() +
   geom_point(shape = 1) +
   scale_x_continuous(minor_breaks = seq(0,21,1), expand = c(0,0), breaks = c(1,7,14,21), limits = c(0.5,21.5)) +
   scale_y_continuous(expand = c(0,0), limits = c(0,35)) +
+  scale_color_manual(values = brewer.pal(9,"Purples")[rev(c(3,6,9))],
+                     labels = expression("Prophet("*tau*" = "*0.10*")","Prophet("*tau*" = "*0.25*")","Prophet("*tau*" = "*0.40*")")) +
   labs(x = "Number of days forecasted ahead", 
        y = "Average CRPS") +
   theme_bw2() +
   theme(legend.title = element_blank())
 
-scores_proph_sum %>%
+# zoom in on Prophet(0.10) and Prophet(0.25)
+prophet_pl_zoom <- scores_proph_sum %>%
   dplyr::filter(variable != "proph0.10") %>%
   spread(variable, value) %>%
   mutate(dp = proph0.25 - proph0.40) %>%
   ggplot(aes(x = n, y = dp)) +
   geom_hline(aes(yintercept = 0), linetype = "dashed") +
-  geom_line()
+  geom_line() +
+  geom_point() +
+  scale_x_continuous(minor_breaks = seq(0,21,1), expand = c(0,0), breaks = c(1,7,14,21), limits = c(0.5,21.5)) +
+  #scale_y_continuous(expand = c(0.005,0.005)) +
+  labs(x = "Number of days forecasted ahead", 
+       y = "Difference in average CRPS\nbetween Prophet(0.25) and Prophet(0.10)") +
+  theme_bw2() +
+  theme(legend.title = element_blank())
+
+# combine into one plot
+proph_pl <- grid.arrange(prophet_pl + labs(title = "a"), prophet_pl_zoom + labs(title = "b"),
+                         ncol = 1, widths = 12, heights = c(8,8))
+
+save_plot(proph_pl, "results/experiments_proph.pdf", w = 12, h = 16)
 ```
