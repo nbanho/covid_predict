@@ -22,6 +22,19 @@ mat_to_list <- function(D, models = c("arima", "cori", "prophet", "gp")) {
     do.call(rbind, .)
 }
 
+mat_to_list_rowwise <- function(D, models = c("arima", "cori", "prophet", "gp")) {
+  # matrix rowwise to list
+  A = lapply(D$data, function(d) lapply(seq_len(nrow(d)), function(i) d[i,]))
+  # flatten list
+  A = A[[1]]
+  # matrix of draws to list
+  B = lapply(A, function(d) mutate_at(d, vars(models), ~ list(c(.)))) 
+  # cbind tibbles
+  C = do.call(rbind, B)
+  # return df
+  return(C)
+}
+
 # get mean forecast
 get_mean_forecast <- function(D, models = c("arima", "cori", "prophet", "gp")) {
   map2(D$data, D$forecast_date, function(d,f) {

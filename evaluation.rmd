@@ -46,13 +46,13 @@ phase_labs <- read_csv("data/us-selected-states_labeled-phases.csv") %>%
 
 # models
 models <- c("cori", "arima", "prophet", "gp")
-model_names <- c("Cori", "ARIMA", "Prophet", "GP")
+model_names <- c("EpiEstim", "ARIMA", "Prophet", "GP")
 names(model_names) <- models
 
 # states
 states <- c("az","ca","il","md","nj","ny")
 state_names <- c("Arizona", "California", "Illinois", 
-                 "Maryland", "New\nJersey", "New York")
+                 "Maryland", "New Jersey", "New York")
 names(state_names) <- states
 
 # parameters
@@ -73,10 +73,43 @@ max_inc <- 300
 
 ## Plot forecast
 
-### California by model
+### Example forecast (California)
 
 ```{r}
-df_ny <- read_files(files[2]) %>%
+df_ex <- read_files(files[2])
+```
+
+#### Single 3-week
+
+```{r}
+df_ex_single <- df_ex %>%
+  dplyr::filter(forecast_date == "2020-11-21") %>%
+  mat_to_list_rowwise() %>%
+  unnest(cols = models) %>%
+  mutate(state_id = "ca") %>%
+  comp_inc(cori) %>%
+  rename(target = incidence) %>%
+  dplyr::select(date, target, models) %>%
+  mutate_at(models, ~ ifelse(. > max_inc, max_inc, .)) %>%
+  melt(c("date")) %>%
+  mutate(variable = recode(variable, !!! model_names)) 
+
+ex_single_pl <- df_ex_single %>%
+ plot_predict(interval=T) + 
+  labs(y = "Incidence (new cases per 100,000 population)", 
+       color = "CrI", fill = "CrI") +
+  scale_y_continuous(limits = c(0, max_inc), expand = c(0,0)) +
+  scale_x_date(breaks = as.Date(c("2020-11-21", "2020-11-28", "2020-12-05", "2020-12-11")),
+               date_labels = "%b %d", expand = c(0,0)) + 
+  theme(panel.spacing = unit(2, "lines"))
+
+ex_single_pl
+```
+
+#### Full 10-day 
+
+```{r}
+df_ex_full <- df_ex %>%
   get_n_ahead() %>%
   mat_to_list() %>%
   unnest(cols = models) %>%
@@ -85,23 +118,32 @@ df_ny <- read_files(files[2]) %>%
   rename(target = incidence) %>%
   dplyr::select(date, target, models) %>%
   mutate_at(models, ~ ifelse(. > max_inc, max_inc, .)) %>%
-  melt(c("date"))
+  melt(c("date")) %>%
+  mutate(variable = recode(variable, !!! model_names)) 
 
-ny_pl <- df_ny %>%
-  mutate(variable = recode(variable, !!! model_names)) %>%
+ex_full_pl <- df_ex_full %>%
   plot_predict(interval = T) +
   scale_y_continuous(limits = c(0, max_inc), expand = c(0,0)) +
   labs(y = "Incidence (new cases per 100,000 population)", 
-       color = "CrI", fill = "CrI")
+       color = "CrI", fill = "CrI") +
+  theme(panel.spacing = unit(2, "lines"))
 
-ny_pl
+ex_full_pl
 
-ny_pl_wtitle <- ny_pl +
+ex_full_pl_wtitle <- ex_full_pl +
   labs(title = "Probabilistic forecast for California", 
        subtitle = "Probabilistic 10-day forecast (blue) of incidence with COVID-19 (black) for California")
 
-save_plot(ny_pl_wtitle, "results/prob_forecast_ca.png", w = 16, h = 16) 
-save_plot(ny_pl, "results/prob_forecast_ca.pdf", w = 16, h = 12) 
+save_plot(ex_full_pl_wtitle, "results/prob_forecast_ca.png", w = 16, h = 16) 
+save_plot(ex_full_pl, "results/prob_forecast_ca.pdf", w = 16, h = 12) 
+```
+
+```{r}
+ex_pl <- grid.arrange(ex_single_pl + labs(title = "a"), 
+                      ex_full_pl + theme(legend.position = "none") + labs(title = "b"),
+                      ncol = 1, widths = 16, heights = c(9, 9))
+
+save_plot(ex_pl, "results/examples.pdf", w = 16, h = 18)
 ```
 
 ### By model and country
@@ -239,6 +281,29 @@ save_plot(pCalib_pl_wtitle, "results/calibration_probabilistic.png", w = 16, h =
 ### Marginal calibration
 
 ```{r}
+D <- A$data %>%
+  lapply(., function(X) X %>% dplyr::select(date, incidence)) %>%
+  do.call(rbind, .) %>%
+  group_by(date) %>%
+  slice(1) %>%
+  ungroup()
+
+B <- A %>% 
+  add_n_ahead() %>%
+  lapply(., function(X) comp_inc(X, cori)) %>%
+  lapply(., function(X) cbind(dplyr::select(X, state_id, date, n, incidence), 
+                                sapply(models, function(m) pred_score(X[[m]], X$incidence, type = "calibration"))))
+  
+
+
+  
+  
+    add_n_ahead() %>%
+    .$data %>%
+    lapply(., function(X) mutate(X, state_id = tolower(gsub(".rds", "", basename(f))))) %>%
+    lapply(., function(X) comp_inc(X, cori)) %>%
+  lapply(., function(x) sapply(models, function(m) ecdf))
+
 Gx <- df_pCalib %>%
   group_by(state_id, date) %>% 
   slice(1) %>%
@@ -274,7 +339,7 @@ mCalib_pl <- df_mCalib %>%
   scale_y_continuous(limits = c(-.6, .6), breaks = seq(-0.6,0.6,.3)) +
   scale_color_manual(values = mcols) +
   labs(x = "Incidence (new cases per 100,000 people)", 
-       y = expression(CDF[Forecast]-CDF[Observed])) +
+       y = expression(bar(CDF)[Forecast]-CDF[Observed])) +
   theme_bw2() +
   theme(legend.title = element_blank()) 
 
@@ -374,7 +439,9 @@ save_plot(csb_summary_pl, "results/calibration-sharpness-bias.pdf", w = 16, h = 
 
 ## Performance
 
-### Overall skill
+### CRPS
+
+#### Overall
 
 ```{r}
 df_cens_ps <- do.call(rbind, map(files, function(f) {
@@ -398,7 +465,7 @@ skill_pl <- df_cens_ps_sum %>%
   theme(legend.title = element_blank())
 ```
 
-### Skill by phase
+### ... by phase
 
 ```{r}
 which_phase <- function(id, date) {
@@ -446,50 +513,74 @@ save_plot(crps_by_phase_pl_wtitle, "results/skill.png", w = 16, h = 16)
 ```
 
 
-### Skill by state 
+### ... by state 
 
 ```{r}
-### Weighting
-WM <- data_delay(30, T, p_in, mu = rnorm(1e4, 10.92, 0.94), sigma = rnorm(1e4, 5.41, 0.27))
-w <- WM %>%
-  group_by(x) %>%
-  summarize(mean_weight = mean(value)) %>%
-  dplyr::select(mean_weight) %>%
-  unlist()
-
-plot(w, xlab = "Days ahead", ylab = "Weight", type = "b")
-
-df_ps_weighted <- df_cens_ps %>%
-  mutate_at(vars(models), ~ . * w[n]) %>%
-  group_by(state_id, date) %>%
-  summarize_at(vars(models), ~ sum(.)) %>%
-  ungroup()
-
-crps_by_state_pl <- df_ps_weighted %>%
-  dplyr::select(-date) %>%
-  melt(c("state_id")) %>%
-  group_by(state_id, variable) %>%
+crps_by_state_pl <- df_cens_ps %>%
+  dplyr::select(-incidence) %>%
+  melt(c("state_id", "date", "n")) %>%
+  group_by(variable, state_id, n) %>%
   summarize(value = mean(value)) %>%
   ungroup() %>%
   mutate(variable = recode(variable, !!! model_names)) %>%
   mutate(state_id = recode(state_id, !!! state_names)) %>%
-  ggplot(aes(x = state_id, y = value, color = variable, group = variable)) +
+  ggplot(aes(x = n, y = value, color = variable)) +
+  facet_wrap(~ state_id) +
   geom_line() +
   geom_point(shape = 1) +
-  scale_x_discrete(expand = c(0.05,0.05)) +
-  scale_color_manual(values = mcols) +
-  labs(y = "Weighted average CRPS") +
+  scale_y_continuous(expand = c(0,0), limits = c(0, 60)) +
+  scale_x_continuous(minor_breaks = seq(0,21,1), expand = c(0,0), breaks = c(1,7,14,21), limits = c(0.5,21.5)) +
+  labs(y = "Average CRPS", x = "Number of days forecasted ahead") +
   theme_bw2() +
-  theme(legend.title = element_blank(), axis.title.x = element_blank())
-  
-crps_by_state_pl  
+  theme(legend.title = element_blank())
 
-crps_by_state_pl_wtitle <- crps_by_state_pl +
-  labs(title = "Skill",
-       subtitle = "Weighted average CRPS by model and state")
+crps_by_state_pl
 
-save_plot(crps_by_state_pl_wtitle, "results/skill_by_state.png", w = 8, h = 8)  
+save_plot(crps_by_state_pl, "results/skill_by_state.pdf", w = 16, h = 12)  
 ```
+
+<!-- ```{r} -->
+<!-- ### Weighting -->
+<!-- WM <- data_delay(30, T, p_in, mu = rnorm(1e4, 10.92, 0.94), sigma = rnorm(1e4, 5.41, 0.27)) -->
+<!-- w <- WM %>% -->
+<!--   group_by(x) %>% -->
+<!--   summarize(mean_weight = mean(value)) %>% -->
+<!--   dplyr::select(mean_weight) %>% -->
+<!--   unlist() -->
+
+<!-- plot(w, xlab = "Days ahead", ylab = "Weight", type = "b") -->
+
+<!-- df_ps_weighted <- df_cens_ps %>% -->
+<!--   mutate_at(vars(models), ~ . * w[n]) %>% -->
+<!--   group_by(state_id, date) %>% -->
+<!--   summarize_at(vars(models), ~ sum(.)) %>% -->
+<!--   ungroup() -->
+
+<!-- crps_by_state_pl <- df_ps_weighted %>% -->
+<!--   dplyr::select(-date) %>% -->
+<!--   melt(c("state_id")) %>% -->
+<!--   group_by(state_id, variable) %>% -->
+<!--   summarize(value = mean(value)) %>% -->
+<!--   ungroup() %>% -->
+<!--   mutate(variable = recode(variable, !!! model_names)) %>% -->
+<!--   mutate(state_id = recode(state_id, !!! state_names)) %>% -->
+<!--   ggplot(aes(x = state_id, y = value, color = variable, group = variable)) + -->
+<!--   geom_line() + -->
+<!--   geom_point(shape = 1) + -->
+<!--   scale_x_discrete(expand = c(0.05,0.05)) + -->
+<!--   scale_color_manual(values = mcols) + -->
+<!--   labs(y = "Weighted average CRPS") + -->
+<!--   theme_bw2() + -->
+<!--   theme(legend.title = element_blank(), axis.title.x = element_blank()) -->
+
+<!-- crps_by_state_pl   -->
+
+<!-- crps_by_state_pl_wtitle <- crps_by_state_pl + -->
+<!--   labs(title = "Skill", -->
+<!--        subtitle = "Weighted average CRPS by model and state") -->
+
+<!-- save_plot(crps_by_state_pl_wtitle, "results/skill_by_state.png", w = 8, h = 8)   -->
+<!-- ``` -->
 
 
 <!-- ### CRPS -->
@@ -807,6 +898,7 @@ save_plot(crps_by_state_pl_wtitle, "results/skill_by_state.png", w = 8, h = 8)
 ### Hotspot prediction
 
 ```{r}
+# compute probabilities for hotspot
 df_hot <- do.call(rbind, map(files, function(f) {
   # read file
   print(sprintf("Processing file %s", f))
@@ -825,15 +917,29 @@ df_hot <- do.call(rbind, map(files, function(f) {
   
   # add state_id and n to list
   prob_hot$n <- lapply(1:length(df$data), function(x) 1:nrow(hot) + 7)
-  prob_hot$state_id <- df$state[1]
+  prob_hot$state_id <- tolower(gsub(".rds", "", basename(f)))
+  prob_hot$date <- df$forecast_date
   
   # combine to long dataframe
-  prob_hot <- unnest(as_data_frame(prob_hot), c("n", "hot", models)) 
+  prob_hot <- unnest(as_data_frame(prob_hot), c("n", "hot", "date", models)) 
 }))
 
+# proportion of hotspots
+df_prop <- df_hot %>%
+  #dplyr::filter(!is.na(hot)) %>%
+  group_by(state_id, date) %>%
+  slice(1) %>%
+  ungroup()
+
+sum(df_prop$hot==1, na.rm = T) / nrow(df_prop)
+```
+
+#### AUC
+
+```{r}
 df_hot_pl <- df_hot %>%
   filter(!is.na(hot)) %>%
-  melt(c("n", "hot", "state_id")) %>%
+  melt(c("n", "hot", "state_id", "date")) %>%
   group_by(n, variable) %>%
   summarize(AUC = auc(hot, value)[1]) %>%
   ungroup() %>%
@@ -844,7 +950,7 @@ df_hot_pl <- df_hot %>%
   geom_hline(aes(yintercept = 0.5), linetype = "dashed") +
   scale_color_manual(values = mcols) +
   scale_x_continuous(minor_breaks = seq(0,21,1), expand = c(0,0), breaks = c(8,14,21), limits = c(7.5,21.5)) +
-  scale_y_continuous(breaks = seq(0.4, 0.8, .1)) +
+  scale_y_continuous(breaks = seq(0.4, 0.8, .1), labels = function(x) x * 100) +
   labs(x = "Number of days forecasted ahead", 
        y = "AUC (%)") +
   theme_bw2() +
@@ -859,13 +965,72 @@ df_hot_pl_wtitle <- df_hot_pl +
 save_plot(df_hot_pl_wtitle, "results/hotspot.png", w = 8, h = 8)
 ```
 
+#### Sensitivity
+
+```{r}
+sensitivity.topleft <- function(obs, pred) {
+  c(coords(roc(obs,pred), best.method="topleft", x="best")["sensitivity"])
+} 
+
+df_hot_sens_pl <- df_hot %>%
+  filter(!is.na(hot)) %>%
+  melt(c("n", "hot", "state_id", "date")) %>%
+  group_by(n, variable) %>%
+  summarize(sens = unlist(sensitivity.topleft(hot, value))) %>%
+  ungroup() %>%
+  mutate(variable = recode(variable, !!! model_names)) %>%
+  ggplot(aes(x = n, y = sens, color = variable)) +
+  geom_point(shape = 1) +
+  geom_line() +
+  geom_hline(aes(yintercept = 0.5), linetype = "dashed") +
+  scale_color_manual(values = mcols) +
+  scale_x_continuous(minor_breaks = seq(0,21,1), expand = c(0,0), breaks = c(8,14,21), limits = c(7.5,21.5)) +
+  scale_y_continuous(breaks = seq(0.4, 0.8, .1), labels = function(x) x * 100) +
+  labs(x = "Number of days forecasted ahead", 
+       y = "Sensitivity (%)") +
+  theme_bw2() +
+  theme(legend.title = element_blank()) 
+  
+df_hot_sens_pl
+```
+
+#### Specificity
+
+```{r}
+specificity.topleft <- function(obs, pred) {
+  c(coords(roc(obs,pred), best.method="topleft", x="best")["specificity"])
+} 
+
+df_hot_spec_pl <- df_hot %>%
+  filter(!is.na(hot)) %>%
+  melt(c("n", "hot", "state_id", "date")) %>%
+  group_by(n, variable) %>%
+  summarize(sens = unlist(specificity.topleft(hot, value))) %>%
+  ungroup() %>%
+  mutate(variable = recode(variable, !!! model_names)) %>%
+  ggplot(aes(x = n, y = sens, color = variable)) +
+  geom_point(shape = 1) +
+  geom_line() +
+  geom_hline(aes(yintercept = 0.5), linetype = "dashed") +
+  scale_color_manual(values = mcols) +
+  scale_x_continuous(minor_breaks = seq(0,21,1), expand = c(0,0), breaks = c(8,14,21), limits = c(7.5,21.5)) +
+  scale_y_continuous(breaks = seq(0.4, 0.8, .1), labels = function(x) x * 100) +
+  labs(x = "Number of days forecasted ahead", 
+       y = "Specificity (%)") +
+  theme_bw2() +
+  theme(legend.title = element_blank()) 
+  
+df_hot_spec_pl
+```
+
 ### Summary plot
 
 ```{r}
-p1_perf <- crps_by_phase_pl + labs(title = "a")
-p2_perf <- crps_by_state_pl + theme(legend.position = "none") + labs(title = "b")
-p3_perf <- df_hot_pl + theme(legend.position = "none") + labs(title = "c")
-perf_sum_pl <- grid.arrange(p1_perf, grid.arrange(p2_perf, p3_perf,ncol = 2),
+perf_sum_pl <- grid.arrange(crps_by_phase_pl + labs(title = "a"), 
+                            grid.arrange(df_hot_pl + theme(legend.position = "none") + labs(title = "b"),
+                                         df_hot_sens_pl + theme(legend.position = "none") + labs(title = " "), 
+                                         df_hot_spec_pl + theme(legend.position = "none") + labs(title = " "),
+                                         ncol = 3),
                             ncol = 1, widths = 16, heights = c(12, 6))
 
 save_plot(perf_sum_pl, "results/performance.pdf", w = 16, h = 18)
