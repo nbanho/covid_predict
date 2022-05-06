@@ -1,62 +1,45 @@
+# libraries
 library(prophet)
 
-train.prophet <- function(
-  dsy, # df with date column (ds) and time series (y) 
-  cp_scale = 0.25, # value for the change point prior scale
-  cap = NULL, # upper limit
-  floor = NULL, # lower limit
-  weekly = T, # consider weekly seasonality
-  ... # additional model parameters
-) {
+#' @title train and predict using prophet
+#' 
+#' @param cp_scale value for the changepoint prior scale
+#' @param ... args$data: data.frame with columns date, cases, incidence; 
+#'            args$seed: seed
+#'            args$n: the number of days to forecast ahead
+#'            args$d: the number of posterior draws
+#'            
+#' @return A d x n matrix fcast of the posterior draws for the incidence
+
+train_and_predict.prophet <- function(cp_scale, ...) {
   
-  # set cap and floor for logistic growth trend
-  if (!is.null(cap)) { 
-    gr <- "logistic"
-    dsy$cap <- cap
-  } 
-  else {
-    gr <- "linear" 
-  }
-  if (!is.null(floor)) { 
-    dsy$floor <- floor 
-  }
-   
+  # arguments 
+  args <- c(as.list(environment()), list(...))
+  
+  # data
+  dsy <- data.frame(ds = args$data$date,
+                    y = log1p(args$data$incidence))
+                    
+  
   # change points
   n <- nrow(dsy)
-  cpr <- (n - 7) / n
-  nc <- n / 14
+  cpr <- (args$n - 7) / args$n
+  nc <- args$n / 14
   
   # fit
-  if (weekly) {
-    fit <- prophet(dsy, 
-                   growth = gr,
-                   changepoint.range = cpr, n.changepoints = nc, changepoint.prior.scale = cp_scale,
-                   yearly.seasonality = F, weekly.seasonality = 'auto', daily.seasonality = F, seasonality.mode = "multiplicative",
-                   ...)  
-  } else {
-    fit <- prophet(dsy, 
-                   growth = gr,
-                   changepoint.range = cpr, n.changepoints = nc, changepoint.prior.scale = cp_scale,
-                   yearly.seasonality = F, weekly.seasonality = F, daily.seasonality = F,
-                   ...)  
-  }
+  fit <- prophet(dsy, 
+                 growth = "linear",
+                 changepoint.range = cpr, n.changepoints = nc, changepoint.prior.scale = cp_scale,
+                 yearly.seasonality = F, weekly.seasonality = 'auto', daily.seasonality = F, seasonality.mode = "multiplicative",
+                 seed = args$seed, mcmc.samples = args$d, cores = 4)  
   
+  # predict
+  future <- make_future_dataframe(fit, periods = args$n)
+  pred <- predictive_samples(fit, future)
+  pred <- tail(pred$yhat, args$n)
   
-  return(fit)
-}
-
-
-predict.prophet <- function(
-  prophet_obj, # train object from train.prophet
-  n = n_preds, # number of days to project into the future
-  ... # additional parameters
-) {
+  # transform
+  fcast <- expm1(pred)
   
-  future <- make_future_dataframe(prophet_obj, periods = n)
-  if (!is.null(prophet_obj$history$cap[1])) {future$cap <- prophet_obj$history$cap[1]}
-  if (!is.null(prophet_obj$history$floor[1])) {future$floor <- prophet_obj$history$floor[1]}
-  pred <- predictive_samples(prophet_obj, future)
-  pred <- tail(pred$yhat, n)
-  
-  return(pred)
+  return(fcast)
 }

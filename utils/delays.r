@@ -1,31 +1,67 @@
-# distribution from infection to reporting of new case
-# parameters from our study
-p_in <- function(x, mu = 2.47, sigma = 0.45, is_log = T) { 
-  
-  if (is_log) {
-    log_mu <- mu
-    log_sigma <- sigma
-  } else {
-    # log mean and sd
-    log_mu <- log(mu^2 / sqrt(mu^2 + sigma^2))
-    log_sigma <- sqrt( log(1 + sigma^2 / mu^2) ) 
-  }
-  
-  # p
-  p <- plnorm(x, log_mu, log_sigma)
-  
-  return( p )
+library(EpiNow2)
+library(tidyverse)
+library(fitdistrplus)
+library(ConnMatTools)
+
+# incubation period
+
+#' distribution from Lauer et al. (2020) as sourced by EpiNow2
+#' 
+incubation_period <- get_incubation_period(disease = "SARS-CoV-2", source = "lauer", max_value = 15)
+
+
+# generation time
+
+#' distribution from Ganyani et al. (2020) as sourced by EpiNow2
+#' 
+generation_time <- get_generation_time(disease = "SARS-CoV-2", source = "ganyani", max_value = 15)
+
+# # - alternatively from from Hart et al. (2021): https://elifesciences.org/articles/70767#appendix-1
+# # - see Apendix Table 2
+# # - Mean: mean=4.2 (95%-CrI: 3.3-5.3)
+# # - SD: mean=4.9 (95%-CrI: 3.0-8.3)
+
+
+# reporting delay
+
+#' - from Cereda et al. (2020): https://arxiv.org/abs/2003.09320
+#' - see Table S2 (between onset of symptoms and confirmation)
+#' - Gamma distribution with
+#' - Shape: mean=1.88 (SD: 0.055)
+#' - Rate: mean=2.13 (SD: 0.078)
+#' - approximated via simulation with a log normal distribution using fitdistrplus::fitdist 
+#' 
+set.seed(123)
+n <- 1e3
+s <- 1e2
+#pars_nbinom <- list(mean = rnorm(n, 5.25, 0.085), sd = rnorm(n, 1.57, 0.054))
+pars_gamma <- list(shape = rnorm(n, 1.88, 0.055), rate = rnorm(n, 2.13, 0.078))
+pars_lnorm_rep_del <- list()
+for (i in 1:s) {
+  #d <- rnbinom(n, size = pars_nbinom$sd[i], mu = pars_nbinom$mean[i])
+  #d <- ifelse(d==0, d+1e-6, d)
+  d <- rgamma(n, shape = pars_gamma$shape[i], scale = pars_gamma$rate[i])
+  pars_lnorm_rep_del[[i]] <- fitdist(d, distr = "lnorm")$estimate
 }
+meanlog_rd_mean <- mean(sapply(pars_lnorm_rep_del, function(x) x["meanlog"]))
+meanlog_rd_sd <- sd(sapply(pars_lnorm_rep_del, function(x) x["meanlog"]))
+sdlog_rd_mean <- mean(sapply(pars_lnorm_rep_del, function(x) x["sdlog"]))
+sdlog_rd_sd <- sd(sapply(pars_lnorm_rep_del, function(x) x["sdlog"]))
 
-# generation time distribution
-# From Ferretti: Weibull(3.2862, 6.1244)
-p_g <- function(x, distr = "weibull", p1 = 3.2862, p2 = 6.1244) { 
-  if (distr == "weibull") { pweibull(x, p1, p2) }
-}
+reporting_delay <- list(
+  mean = meanlog_rd_mean, mean_sd = meanlog_rd_sd,
+  sd = sdlog_rd_mean, sd_sd = sdlog_rd_sd,
+  max = 15
+)
 
 
+# discretize delay distribution
 
-# Vectorize delay function
+#' @param xT number of days 
+#' @param from0 whether distribution should start at zero
+#' @param FUN distribution, e.g. plnorm
+#' @param ... parameters of FUN
+#' 
 vp <- function(xT, from0, FUN, ...) {
   x <- seq(0,xT)
   y <- length(x)
@@ -43,25 +79,42 @@ vp <- function(xT, from0, FUN, ...) {
 }
 
 
+# plot delay distribution
 
+#' @param delay parameters of the delay distribution
+#' @param distr distribution (lognormal or gamma)
+#' @param S number of samples
+#' 
 
-# Simulate data for delay
-data_delay <- function(xT, from0, FUN, ...) {
-  fun_args <- list(...)
-  if (length(fun_args) == 0) {
-    fun_args <- formals(FUN)[-1]
-    arg_names <- names(formals(FUN)[-1])
-    dat <- data.frame(x = 0:xT, value = vp(xT, from0, FUN, ...))
-    return(dat)
-  } else {
-    l <- length(fun_args[[1]])
-    p_x <- mapply(function(...) invoke(vp, xT = xT, from0 = from0, FUN = FUN,  ...), ...)
-    p_par <- mapply(function(...) paste0("(", paste(sapply(list(...), round, 2), collapse = ", "), ")"), ...)
-    dat <- data.frame(cbind(0:xT, p_x))
-    colnames(dat) <- c("x", p_par)
-    dat_long <- reshape2::melt(dat, "x") %>%
-      mutate(par1 = stringi::stri_extract(variable, regex = "\\d.\\d{1,2}"),
-             par2 = gsub(", ", "", stringi::stri_extract(variable, regex = ", \\d.\\d{1,2}")))
-    return(dat_long)
+plot_delay_distr <- function(delay, distr = "lognormal", S = 100) {
+  if (grepl("lognormal", distr)) {
+    params <- lognorm_dist_def(delay$mean, delay$mean_sd, delay$sd, delay$sd_sd, max_value = delay$max, samples = S)
+    lines <- lapply(params$params, function(p) vp(delay$max, from0 = T, FUN = plnorm, meanlog = p$mean, sdlog = p$sd))
+  } 
+  else if (grepl("gamma", distr)) {
+    params <- list(mean = rnorm(S, delay$mean, delay$mean_sd), sd = rnorm(S, delay$sd, delay$sd_sd))
+    lines <- map2(params$mean, params$sd, function(m, s) {
+      gamma_params <- gammaParamsConvert(mean = m, sd = s)
+      vp(delay$max, from0 = T, FUN = pgamma, shape = gamma_params$shape, scale = gamma_params$scale)
+    })
   }
+  data <- do.call(cbind, lines) %>% 
+    data.frame() %>%
+    mutate(`Number of days` = 0:delay$max) %>%
+    reshape2::melt("Number of days") %>%
+    rename(Probability = value)
+  
+  ggplot(data, aes(x = `Number of days`, y = Probability)) +
+    stat_lineribbon() +
+    scale_fill_brewer() +
+    scale_x_continuous(limits = c(0, delay$max))
 }
+
+
+# convert mean and sd to gamma parameters
+
+#' @param mu
+#' @param sigma
+#' 
+
+to_gamma.shape <- function(mu, sigma) {  }

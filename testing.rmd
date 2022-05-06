@@ -32,7 +32,7 @@ source("models/cori.r")
 source("utils/predict.r")
 
 # EpiNow2
-library(EpiNow2)
+source("models/epinow2.r")
 
 # Epidemia
 source("models/epidemia.r")
@@ -57,9 +57,23 @@ source("models/prophet.r")
 df <- readRDS("data/us-selected-states_ts-date.rds")
 ```
 
-## EpiEstim 
+## Mechanistic models
 
-### Under the hood
+```{r}
+# delay distributions
+# - generation time distribution
+plot_delay_distr(generation_time, distr = "gamma")
+
+# - incubation period
+plot_delay_distr(incubation_period)
+
+# - reporting delay
+plot_delay_distr(reporting_delay)
+```
+
+### i. EpiEstim 
+
+#### Under the hood
 
 ```{r}
 # configure serial interval
@@ -124,7 +138,7 @@ ggplot(mapping = aes(x = date)) +
   scale_fill_brewer()
 ```
 
-### Test functions
+#### Test functions
 
 ```{r}
 # data
@@ -134,7 +148,7 @@ data <- df %>%
   slice(30:(30+56-1))
 
 # train
-cori.fit7 <- train.cori(data$cases, tau = 7)
+cori.fit7 <- train.cori(data$cases, tau = 7, n1 = 45, n2 = 45)
 plot(cori.fit7$eR)
 cori.fit14 <- train.cori(data$cases, tau = 14)
 plot(cori.fit14$eR)
@@ -158,97 +172,28 @@ cori_proj <- rbind(mat_to_long(cori.proj7, "cori-7"),
 ggplot(cori_proj, aes(x = key, y = value)) +
   facet_wrap(~ var) +
   stat_lineribbon()
-
-```
-
-### Train & Pred
-
-```{r}
-results_ee <- list()
-
-for (j in 1:length(countries)) {
-  
-  # data
-  ctry <- countries[j]
-  df_ctry <- subset(df, id == ctry)
-  
-  # test data
-  test_df_ctry <- slice(df_ctry, (n_train+1):nrow(df_ctry))
-  
-  # R estimates
-  trained_cori <- train(df_ctry %>% rename(target = new_confirmed), method = "cori")
-  
-  # predictions
-  pred_mat <- matrix(NA, ncol = n_preds, nrow = nrow(test_df_ctry))
-  for (k in 1:nrow(test_df_ctry)) {
-    preds <- predict(train_obj =  trained_cori, i = n_train + k - 1, n = n_preds, d = n_draws)
-    mean_preds <- rowMeans(preds)
-    pred_mat[k, ] <- mean_preds
-  }
-  
-  # combine
-  pred_df <- data.frame(pred_mat) %>%
-    set_names(paste0("pred_ahead_", 1:n_preds)) %>%
-    mutate(id = ctry,
-           date = test_df_ctry$date) %>%
-    reshape2::melt(c("id", "date"))  %>%
-    rename(n_ahead = variable) %>%
-    mutate(n_ahead = as.numeric(stringi::stri_extract(n_ahead, regex = "\\d{1,2}"))) %>%
-    mutate(date = date %m+% days(n_ahead))
-  write_csv(pred_df, paste0("predictions/cori/", ctry, ".csv"))
-  results_ee[[j]] <- pred_df
-}
-
-results_ee_df <- do.call(rbind, results_ee)
-results_ee_df <- left_join(results_ee_df, dplyr::select(df, id, date, new_confirmed))
-```
-
-### Evaluation
-
-```{r}
-ggplot() +
-  geom_line(data = results_ee_df, mapping = aes(x = date, y = value, color = n_ahead)) +
-  geom_line(data = subset(results_ee_df, n_ahead == 1), mapping = aes(x = date, y = new_confirmed), color = "black") +
-  facet_wrap(~ id) +
-  scale_color_viridis_c() +
-  labs(y = "Number of new cases", color = "N") +
-  theme_bw() +
-  theme(axis.title.x = element_blank())
 ```
 
 
-## EpiNow2
+### ii. EpiNow2
 
-### Under the hood
+#### Under the hood
 
 ```{r}
 # data
-df_deu <- df %>%
-  dplyr::filter(id == "DEU") %>%
+data <- df %>%
+  dplyr::filter(state == "NY") %>%
   arrange(date) %>%
-  rename(confirm = new_confirmed) %>%
-  dplyr::select(date, confirm)
-
-# train data
-train_df <- df_deu[201:260, ]
-plot(train_df$confirm, type = "l")
-
-# delay distributions
-reporting_delay <- list(
-  mean = convert_to_logmean(2, 1), mean_sd = 0.1,
-  sd = convert_to_logsd(2, 1), sd_sd = 0.1,
-  max = 10
-)
-generation_time <- get_generation_time(disease = "SARS-CoV-2", source = "ganyani")
-incubation_period <- get_incubation_period(disease = "SARS-CoV-2", source = "lauer")
+  slice(30:(30+56-1))
 
 # estimate R
-estimates <- epinow(reported_cases = train_df,
+estimates <- epinow(reported_cases = data %>% dplyr::select(date, cases) %>% rename(confirm = cases),
                     generation_time = generation_time,
                     delays = delay_opts(incubation_period, reporting_delay),
-                    rt = rt_opts(prior = list(mean = 2, sd = 1), 
-                                 rw = 7,
-                                 use_breakpoints = F),
+                    # rt = rt_opts(prior = list(mean = 1, sd = 1), 
+                    #              rw = 7,
+                    #              use_breakpoints = F),
+                    gp = gp_opts(),
                     stan = stan_opts(cores = 4),
                     horizon = 21,
                     output = "samples")
@@ -256,10 +201,40 @@ estimates <- epinow(reported_cases = train_df,
 plot(estimates)
 ```
 
+#### Test functions
 
-## Epidemia
+```{r}
+# data
+data <- df %>%
+  dplyr::filter(state == "NY") %>%
+  arrange(date) %>%
+  slice(30:(30+56-1))
 
-### Under the hood
+# train
+epi_obj <- train.epinow2(data, n = 21)
+
+# predict
+pred_samples <- predict.epinow2(epi_obj)
+pred_samples_df <- mat_to_long(pred_samples, "predictions")
+  
+# evaluate
+test_data <- df %>% 
+  dplyr::filter(state == "NY") %>%
+  arrange(date) %>%
+  slice((30+56):(30+56+21-1)) %>%
+  mutate(key = 1:nrow(.)) %>%
+  rename(value = cases)
+
+ggplot() +
+  stat_lineribbon(data = pred_samples_df, mapping = aes(x = key, y = value)) +
+  geom_line(data = test_data, mapping = aes(x = key, y = value)) +
+  scale_fill_brewer()
+```
+
+
+### iii. Epidemia
+
+#### Under the hood
 
 ```{r}
 df_deu <- df %>%
@@ -333,7 +308,7 @@ ggplot(mapping = aes(x = date)) +
   scale_fill_brewer()
 ```
 
-### Test functions
+#### Test functions
 
 ```{r}
 fit <- train.epidemia(data %>% rename(y = new_confirmed, pop = population), chain = 1, iter = 500)
@@ -341,9 +316,11 @@ pred <- predict.epidemia(fit, d = 100)
 ```
 
 
-## ARIMA
+## Stat. Time Series Models
 
-### Under the hood
+### i. ARIMA
+
+#### Under the hood
 
 ```{r}
 # train data
@@ -435,7 +412,7 @@ ggplot(mapping = aes(x = x, y = inc)) +
 
 ```
 
-### Test functions
+#### Test functions
 
 ```{r}
 # toy model
@@ -452,9 +429,9 @@ plot.predict(deu_first221$date, deu_first221$new_confirmed, deu_pred)
 ```
 
 
-## Prophet
+### ii. Prophet
 
-### Under the hood
+#### Under the hood
 
 ```{r}
 # data
@@ -486,7 +463,7 @@ forecast <- prophet:::predict.prophet(m, future)
 plot(m, forecast) + add_changepoints_to_plot(m)
 ```
 
-### Test functions
+#### Test functions
 
 ```{r}
 # data
@@ -519,10 +496,10 @@ plot.predict(dat_test$date, dat_test$y, pred_prophet0.25)
 plot.predict(dat_test$date, dat_test$y, pred_prophet0.40)
 ```
 
-## Gaussian Process
 
+### iii. Gaussian Process
 
-### Under the hood
+#### Under the hood
 
 ```{r}
 # prior
@@ -649,7 +626,7 @@ ggplot() +
   geom_line(data = rbind(data), mapping = aes(x = x, y = new_confirmed), color = "red")
 ```
 
-### Toy example
+#### Toy example
 
 ```{r}
 # train data

@@ -13,16 +13,27 @@ n_draws <- 2e3
 # number of sampling draws per chain (if MCMC)
 n_sample <- n_draws / 2
 
-# cori: choose n1 and n2 based on n_draws with a fixed ratio
-# cori.n1n2_ratio <- 10
-# cori.n2 <- ceiling(sqrt(n_draws / cori.n1n2_ratio))
-# cori.n1 <- cori.n2 * cori.n1n2_ratio
-
 # number of parallel chains
 n_chains <- 4
 
-# maximum expected incidence
-# prophet.max_inc <- 250 # 25% above the highest observed incidence per 1e5 pop. from BEL and ESP
+# wrapper to train and predict model
+train_and_predict <- function(model, ...) {
+  if (model == "epiestim") {
+    train_and_predict.epiestim(tau = 7, ...)
+  }
+  else if (model == "epinow2") {
+    train_and_predict.epinow2(...)
+  }
+  else if (model == "arima") {
+    train_and_predict.arima(...)
+  }
+  else if (model == "prophet") {
+    train_and_predict.prophet(cp_scale = 0.25, ...)
+  }
+  else if (model == "gp") {
+    train_and_predict.gp(...)
+  }
+}
 
 # get samples
 get_samples <- function(DM, TM, k, ns = n_draws, np = n_preds) {
@@ -30,12 +41,14 @@ get_samples <- function(DM, TM, k, ns = n_draws, np = n_preds) {
   DM <- matrix(DM, ncol = ns)
   n <- nrow(TM)
   if (k < np) {
-    return(tail(DM,k))
+    DM <- (tail(DM,k))
   } else if (n == np) {
-    return(DM)
+    DM <- (DM)
   } else {
-    return(head(DM,n))
+    DM <- (head(DM,n))
   }
+  DM_list <- lapply(seq_len(nrow(DM)), function(i) DM[i, ])
+  return(DM_list)
 }
 
 

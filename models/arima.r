@@ -1,45 +1,35 @@
+# libraries
 library(bayesforecast)
 library(rstan)
 
-# Train ARIMA model
-train.arima <- function(
-  y, # number of new confirmed cases
-  weekly = T, # consider weekly seasonal arima
-  ... # additional parameters to auto.arima 
-  # note it is currently not possible to provide a seed to auto.sarima in the call to varstan
-) {
+#' @title train and predict using Bayesian arima
+#' 
+#' @param ... args$data: data.frame with columns date, cases, incidence; 
+#'            args$seed: seed
+#'            args$n: the number of days to forecast ahead
+#'            args$d: the number of posterior draws
+#'            
+#' @return A d x n matrix fcast of the posterior draws for the incidence
+
+train_and_predict.arima <- function(...) {
   
-  #fit <- auto.sarima(ts = ts(y, frequency = 7), max.p = 1, max.d = 1, max.q = 1, max.P = 0, max.Q = 1, max.D = 1, stepwise = F, seasonal = T, ...)
-  if (weekly) {
-    fit <- stan_sarima(ts = ts(y, frequency = 7), order = c(1,0,1), seasonal = c(0,1,0), ...)
-  } else {
-    fit <- stan_sarima(ts = ts(y, frequency = 1), order = c(1,0,1), seasonal = c(0,0,0), ...)
-  }
-    
-  return(fit)
-}
-
-# number of AR
-n_ar <- function(arima_model) {
-  sum( grepl( "ar", row.names(summary(arima_model)) ) )
-}
-
-
-# number of MA
-n_ma <- function(arima_model) {
-  sum( grepl( "ma", row.names(summary(arima_model)) ) ) - 1
-}
-
-
-# Predict with ARIMA model
-predict.arima <- function(
-  varstan_obj, # train object from train.arima
-  n = n_preds, # number of days to project into the future
-  d = n_draws, # number of posterior draws
-  ... # additional parameters
-) {
+  # arguments 
+  args <- c(as.list(environment()), list(...))
   
-  pred <- t(as.matrix(posterior_predict(varstan_obj, h = n, draws = d, ...)))
+  # time series
+  y <- log1p(args$data$incidence)
   
-  return(pred)
+  # set seed 
+  set.seed(args$seed)
+  
+  # fit sarima model
+  fit <- stan_sarima(ts = ts(y, frequency = 7), order = c(1,0,1), seasonal = c(0,1,0), iter = args$d / 2)
+  
+  # forecast
+  pred <- t(as.matrix(posterior_predict(fit, h = args$n, draws = args$d)))
+  
+  # transform
+  fcast <- expm1(pred)
+  
+  return(fcast)
 }
