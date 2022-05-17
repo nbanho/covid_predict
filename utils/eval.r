@@ -10,7 +10,7 @@ read_state_id <- function(f) { gsub("(_.*)", "", basename(f)) }
 read_model <- function(f) { gsub(".rds", "", gsub("(.*_)", "", basename(f))) }
 
 # read forecasts
-read_forecasts <- function(files) {
+read_n_ahead_forecasts <- function(files, n) {
   df_F <- do.call(rbind, lapply(files, function(f) {
     # read model name
     m <- read_model(f)
@@ -23,7 +23,7 @@ read_forecasts <- function(files) {
     
     # filter data
     df <- df %>%
-      get_n_ahead() %>%
+      get_n_ahead(n) %>%
       unnest(cols = c("data")) %>%
       mutate(state_id = tolower(s),
              variable = m) %>%
@@ -31,11 +31,7 @@ read_forecasts <- function(files) {
     
     # compute incidence
     if (grepl("epi", m)) {
-      df <- df %>%
-        rename(m = forecast) %>%
-        comp_inc(m) %>%
-        rename(forecast = m) %>%
-        dplyr::select(-pop)
+      df$forecast <- compute_incidence(df$forecast, df$state_id[1])
     }
     
     return(df)
@@ -44,7 +40,56 @@ read_forecasts <- function(files) {
   df_F <- df_F %>%
     mutate(forecast = ifelse(forecast > max_inc, max_inc, forecast)) %>% 
     mutate(variable = recode(variable, !!! model_names)) %>%
-    rename(value = forecast, target = incidence)
+    rename(value = forecast, target = incidence) %>%
+    mutate(state = recode(state_id, !!! state_names)) 
+}
+
+compute_forecast_score <- function(files, ...) { 
+  do.call(rbind, map(files, function(f) {
+    # read model name
+    m <- read_model(f)
+  
+    # read state id
+    s <- read_state_id(f)
+  
+    # read file 
+    df <- readRDS(f) 
+  
+    # compute incidence
+    if (grepl("epi", m)) {
+      df$data <- lapply(df$data, function(D) { 
+        D$forecast <- lapply(D$forecast, compute_incidence, state_id = tolower(s))
+        return(D)
+      })
+    }
+  
+    # compute score
+    df$data <- lapply(df$data, function(D) {
+      D$forecast <- lapply(D$forecast, function(x) ifelse(x > max_inc, max_inc, x))
+      D$value <- pred_score(D$forecast, D$incidence, ...)
+      return(D %>% dplyr::select(-forecast))
+    })
+  
+    # add n_ahead
+    df <- add_n_ahead(df)
+  
+    # unnest and add info
+    df <- df %>%
+      unnest(cols = c("data")) %>%
+      mutate(state_id = tolower(s),
+             variable = m) %>%
+      mutate(variable = recode(variable, !!! model_names)) %>%
+      rename(target = incidence) %>%
+      mutate(state = recode(state_id, !!! state_names)) 
+  
+    return(df)
+  }))
+}
+
+# get n_ahead forecast draws by model
+get_n_ahead <- function(D, n = 10) {
+  D$data <- map2(D$data, D$forecast_date, function(d,f) dplyr::filter(d, date == f %m+% days(n-1)))
+  D %>% dplyr::filter(sapply(D$data, nrow) > 0)
 }
 
 # add n_ahead
@@ -62,82 +107,41 @@ cc <- county_census %>%
   rename(pop = POPESTIMATE2019) %>%
   dplyr::select(state_id, pop)
 
-comp_inc <- function(D, ..., pop = cc) {
-  D %>%
-    left_join(cc, by = "state_id") %>%
-    ungroup() %>%
-    mutate_at(vars(...), ~ . / pop * 1e5) 
-}
-
-
-# add prediction score
-add_pred_score <- function(D, f, models = models, ...) {
-  D %>%
-    add_n_ahead() %>%
-    .$data %>%
-    lapply(., function(X) mutate(X, state_id = tolower(gsub(".rds", "", basename(f))))) %>%
-    lapply(., function(X) comp_inc(X, matches("cori"))) %>%
-    lapply(., function(X) cbind(dplyr::select(X, state_id, date, n, incidence), 
-                                sapply(models, function(m) pred_score(X[[m]], X$incidence, ...)))) %>%
-    do.call(rbind, .)
-}
+compute_incidence <- function(x, state_id) { x / cc$pop[cc$state_id==state_id] * 1e5 }
 
 pred_score <- function(
-  X, # predicted target
+  x, # predicted target
   y = NULL, # observed target
-  trans = NULL,
   type = "crps", # type of score (default: continuous ranked probability score)
   ... # additional arguments to compute type of score
 ) {
   
-  if (!is.null(trans)) {
-    X <- trans(X)
-    y <- trans(y)
-  }
-  
   if(is.null(y)) {y <- rep(NA, nrow(X))}
-  X <- data.frame(t(X))
   
   if (type == "calibration") {
-    scoring_fct <- function(y, x) { ecdf(x)(y) }
+    scoring_fct <- function(x, y) { ecdf(x)(y) }
   }
   else if (type == "sharpness") {
-    scoring_fct <- function(y = NULL, x, q) { quantile(x, 1-q) - quantile(x, q) }
+    scoring_fct <- function(x, y = NULL, q) { quantile(x, 1-q) - quantile(x, q) }
   } 
   else if (type == "crps") {
-    scoring_fct <- function(y, x) { scoringRules::crps_sample(y = y, dat = x) }
+    scoring_fct <- function(x, y) { scoringRules::crps_sample(y = y, dat = x) }
   } 
   else if (type == "logscore") {
-    scoring_fct <- function(y, x) { scoringRules::logs_sample(y = y, dat = x)}
+    scoring_fct <- function(x, y) { scoringRules::logs_sample(y = y, dat = x)}
   }
   else if (type == "bias") {
-    scoring_fct <- function(y, x) { sum(x > y) / length(x) }
+    scoring_fct <- function(x, y) { sum(x > y) / length(x) }
   } 
   else if (type == "critical") {
-    scoring_fct <- function(y = NULL, x, q) { sum(x > q) / length(x) }
+    scoring_fct <- function(x, y = NULL, q) { sum(x > q) / length(x) }
   } 
   
-  score <- mapply(scoring_fct, y, X, ...)
+  score <- map2_dbl(x, y, scoring_fct, ...)
   
-  return( list(score) )
+  return( score )
   
 }
-
-# summarize prediction score by day or week
-summarize_score_by_n <- function(df, fct, week = F) {
-  if (week) {
-    df <- df %>% mutate(n = cut(n, breaks = n_brks, labels = n_lbs))
-  }
-  df <- df %>%
-    dplyr::select(n, models) %>%
-    melt("n") %>%
-    group_by(n, variable) %>%
-    summarize(value = fct(value)) %>%
-    ungroup() %>%
-    mutate(variable = recode(variable, !!! model_names))
-  return(df)
-}
-
 
 is_hotspot <- function(y, q = .25, min_inc = 10) {
   n <- length(y)
@@ -217,44 +221,6 @@ plot_predict <- function(
     
   }
   
-  return(pl)
-  
-}
-
-
-plot_score <- function(
-  dat, # the data frame with columns value, variable, and group
-  models, # model names
-  model_colors # color for models
-) {
-  
-  if ("group" %in% colnames(dat)) {
-    pl <- dat %>%
-      dplyr::select(c("state_id", "group", models)) %>%
-      gather("variable", "value", models) %>%   
-      group_by(state_id, group, variable) %>%
-      summarize(mean_score = mean(value)) %>%
-      ungroup() %>% 
-      mutate(variable = factor(variable, levels = models)) %>%
-      ggplot(aes(x = variable, y = mean_score, color = variable)) +
-      facet_wrap(~ group)
-  } else {
-    pl <- dat %>%
-      dplyr::select_at(c("state_id", models)) %>%
-      gather("variable", "value", models) %>%    
-      group_by(state_id, variable) %>%
-      summarize(mean_score = mean(value)) %>%
-      ungroup() %>% 
-      mutate(variable = factor(variable, levels = models)) %>%
-      ggplot(aes(x = variable, y = mean_score, color = variable)) 
-  }
-  
-  pl <- pl +
-    geom_boxplot() +
-    geom_jitter(shape = 4, width = .1, height = 0, alpha = .66) +
-    scale_color_manual(values = model_colors) +
-    theme_bw2() 
-
   return(pl)
   
 }
