@@ -81,8 +81,8 @@ for (st in toupper(selected_states)) {
       dplyr::filter(date < date_seq[d] %m+% days(21)) %>%
       tail(d)
   }
-  df_st_train <- tibble(state = "st", forecast_date = date_seq, data = list_st_train)
-  df_st_test <- tibble(state = "st", forecast_date = date_seq, data = list_st_test)
+  df_st_train <- tibble(state = st, forecast_date = date_seq, data = list_st_train)
+  df_st_test <- tibble(state = st, forecast_date = date_seq, data = list_st_test)
   saveRDS(df_st_train, paste0("data/us-selected-states/", st, "-train.rds"))
   saveRDS(df_st_test, paste0("data/us-selected-states/", st, "-test.rds"))
 }
