@@ -45,8 +45,8 @@ phase_labs <- read_csv("data/us-selected-states_labeled-phases.csv") %>%
                                                               "subexponential decline", "exponential decline"))))
 
 # models
-models <- c("cori", "arima", "prophet", "gp")
-model_names <- c("EpiEstim", "ARIMA", "Prophet", "GP")
+models <- c("epiestim", "epinow2", "arima", "prophet", "gp")
+model_names <- c("EpiEstim", "EpiNow2", "ARIMA", "Prophet", "GP")
 names(model_names) <- models
 
 # states
@@ -73,29 +73,54 @@ max_inc <- 300
 
 ## Plot forecast
 
-### Example forecast (California)
+### Example forecast
 
 ```{r}
-df_ex <- read_files(files[2])
+ex_state <- "California"
+ex_state_id <- "ca"
+ex_date <- "2020-11-21"
+ex_files <- files[grepl(toupper(ex_state_id), files)]
 ```
 
 #### Single 3-week
 
 ```{r}
-df_ex_single <- df_ex %>%
-  dplyr::filter(forecast_date == "2020-11-21") %>%
-  mat_to_list_rowwise() %>%
-  unnest(cols = models) %>%
-  mutate(state_id = "ca") %>%
-  comp_inc(cori) %>%
-  rename(target = incidence) %>%
-  dplyr::select(date, target, models) %>%
-  mutate_at(models, ~ ifelse(. > max_inc, max_inc, .)) %>%
-  melt(c("date")) %>%
-  mutate(variable = recode(variable, !!! model_names)) 
+# Get data
+df_ex_single <- do.call(rbind, lapply(ex_files, function(f) {
+  # read model name
+  m <- read_model(f)
+  
+  # read state id
+  s <- read_state_id(f)
+  
+  # read file 
+  df_ex <- readRDS(f) 
+  
+  # filter data
+  df_ex <- df_ex %>%
+    dplyr::filter(forecast_date == ex_date) %>%
+    unnest(cols = c("data")) %>%
+    mutate(state_id = tolower(s),
+           variable = m) %>%
+    unnest(cols = c("forecast")) 
+  
+  # compute incidence
+  if (grepl("epi", m)) {
+    df_ex <- df_ex %>%
+      rename(m = forecast) %>%
+      comp_inc(m) %>%
+      rename(forecast = m) %>%
+      dplyr::select(-pop)
+  }
+  
+  return(df_ex)
+})) 
 
 ex_single_pl <- df_ex_single %>%
- plot_predict(interval=T) + 
+  mutate(forecast = ifelse(forecast > max_inc, max_inc, forecast)) %>% 
+  mutate(variable = recode(variable, !!! model_names)) %>%
+  rename(value = forecast, target = incidence) %>%
+  plot_predict(interval = T) +
   labs(y = "Incidence (new cases per 100,000 population)", 
        color = "CrI", fill = "CrI") +
   scale_y_continuous(limits = c(0, max_inc), expand = c(0,0)) +
@@ -104,23 +129,22 @@ ex_single_pl <- df_ex_single %>%
   theme(panel.spacing = unit(2, "lines"))
 
 ex_single_pl
+
+ex_single_pl_wtitle <- ex_single_pl +
+  labs(title = paste0("Probabilistic forecast for ", ex_state), 
+       subtitle = paste0("Probabilistic 10-day forecast (blue) of incidence with COVID-19 (black) for ", ex_state))
+
+save_plot(ex_single_pl_wtitle, paste0("results/prob_forecast_", ex_state_id, "-", ex_date, ".png"), w = 16, h = 16) 
+save_plot(ex_single_pl, paste0("results/prob_forecast_", ex_state_id, "-", ex_date, ".pdf"), w = 16, h = 12) 
 ```
 
 #### Full 10-day 
 
 ```{r}
-df_ex_full <- df_ex %>%
-  get_n_ahead() %>%
-  mat_to_list() %>%
-  unnest(cols = models) %>%
-  mutate(state_id = "ca") %>%
-  comp_inc(cori) %>%
-  rename(target = incidence) %>%
-  dplyr::select(date, target, models) %>%
-  mutate_at(models, ~ ifelse(. > max_inc, max_inc, .)) %>%
-  melt(c("date")) %>%
-  mutate(variable = recode(variable, !!! model_names)) 
+# read forecasts
+df_ex_full <- read_forecasts(ex_files)
 
+# plot forecasts
 ex_full_pl <- df_ex_full %>%
   plot_predict(interval = T) +
   scale_y_continuous(limits = c(0, max_inc), expand = c(0,0)) +
@@ -131,18 +155,21 @@ ex_full_pl <- df_ex_full %>%
 ex_full_pl
 
 ex_full_pl_wtitle <- ex_full_pl +
-  labs(title = "Probabilistic forecast for California", 
-       subtitle = "Probabilistic 10-day forecast (blue) of incidence with COVID-19 (black) for California")
+  labs(title = paste0("Probabilistic forecast for ", ex_state), 
+       subtitle = paste0("Probabilistic 10-day forecast (blue) of incidence with COVID-19 (black) for ", ex_state))
 
-save_plot(ex_full_pl_wtitle, "results/prob_forecast_ca.png", w = 16, h = 16) 
-save_plot(ex_full_pl, "results/prob_forecast_ca.pdf", w = 16, h = 12) 
+# save plots
+save_plot(ex_full_pl_wtitle, paste0("results/prob_forecast_", ex_state_id, ".png"), w = 16, h = 16) 
+save_plot(ex_full_pl, paste0("results/prob_forecast_", ex_state_id, ".pdf"), w = 16, h = 12) 
 ```
 
 ```{r}
+# combine plots
 ex_pl <- grid.arrange(ex_single_pl + labs(title = "a"), 
                       ex_full_pl + theme(legend.position = "none") + labs(title = "b"),
                       ncol = 1, widths = 16, heights = c(9, 9))
 
+# save plot
 save_plot(ex_pl, "results/examples.pdf", w = 16, h = 18)
 ```
 
@@ -150,73 +177,81 @@ save_plot(ex_pl, "results/examples.pdf", w = 16, h = 18)
 
 ```{r}
 pdf(file = "results/ts_forecast.pdf", w = 21 / cm(1), h = 14 / cm(1))
-for (f in files) {
-  ctry <- gsub(".rds", "", basename(f))
-  print(
-    read_files(f) %>%
-      get_n_ahead() %>%
-      mat_to_list() %>%
-      unnest(cols = models) %>%
-      mutate(state_id = tolower(ctry)) %>%
-      comp_inc(cori) %>%
-      rename(target = incidence) %>%
-      dplyr::select(date, target, models) %>%
-      mutate_at(models, ~ ifelse(. > max_inc, max_inc, .)) %>%
-      melt(c("date")) %>%
-      plot_predict(interval = T) +
-      scale_y_continuous(limits = c(0, max_inc), expand = c(0,0)) +
-      labs(y = "Incidence (per 100,000 population)", 
-           color = "CrI", fill = "CrI",
-           title = ctry, 
-           subtitle = paste0("Probabilistic ", n_ahead, "-day ahead forecast (blue) for daily new cases (black)")) 
-  )
+for (sid in toupper(states)) {
+  # filter files by state
+  sid_files <- files[grepl(toupper(sid), files)]
   
-  print(
-    read_files(f) %>%
-      get_mean_forecast() %>%
-      dplyr::filter(n %in% c(1, 7, 14, 21)) %>%
-      mutate(n = factor(as.character(n), levels = c("1", "7", "14", "21"))) %>%
-      mutate(state_id = tolower(ctry)) %>%
-      comp_inc(cori) %>%
-      rename(target = incidence) %>%
-      dplyr::select(date, target, n, models) %>%
-      mutate_at(models, ~ ifelse(. > max_inc, max_inc, .)) %>%
-      reshape2::melt(c("date", "n")) %>%
-      plot_predict(interval = F) +
-      scale_y_continuous(limits = c(0, max_inc), expand = c(0,0)) +
-      labs(y = "Incidence (per 100,000 population)",
-           color = "Number of days forecasted ahead",
-           title = ctry, 
-           subtitle = "Posterior mean N-days ahead forecast (color) for daily new cases (black)")
-  )
+  # read forecasts
+  df_S <- read_forecasts(sid_files)
+  
+  # plot forecasts 
+  pl_df_S <- df_S %>%
+    plot_predict(interval = T) +
+    scale_y_continuous(limits = c(0, max_inc), expand = c(0,0)) +
+    labs(y = "Incidence (per 100,000 population)", 
+         color = "CrI", fill = "CrI",
+         title = sid, 
+         subtitle = paste0("Probabilistic ", n_ahead, "-day ahead forecast (blue) for daily new cases (black)"))
+  
+  # print to pdf
+  print(pl_df_S)
 }
 dev.off()
 ```
 
 
-### Average-7d by country
+### Average forecast by state
 
 ```{r}
 mean10 <- do.call(rbind, lapply(files, function(f) {
-  read_files(f) %>%
-    get_mean_forecast() %>%
-    dplyr::filter(n == n_ahead) %>%
-    mutate(state_id = tolower(gsub(".rds", "", basename(f)))) %>%
-    comp_inc(cori) %>%
-    rename(target = incidence, id = state_id) %>%
-    dplyr::select(id, date, target, models) %>%
-    melt(measure.vars = c("target", models)) %>%
-    group_by(id, variable) %>%
-    mutate(value = zoo::rollmean(value, k = 7, fill = NA, align = "right")) %>%
-    ungroup() %>%
-    na.omit()
+  # read model name
+  m <- read_model(f)
+    
+  # read state id
+  s <- read_state_id(f)
+    
+  # read file 
+  df <- readRDS(f) 
+    
+  # filter data
+  df$N <- sapply(df$data, nrow)
+  df <- dplyr::filter(df, N >= n_ahead)
+  df$data <- lapply(df$data, function(D) D[n_ahead, ])
+  df <- do.call(rbind, df$data)
+  
+  # compute mean forecast
+  df$forecast <- sapply(df$forecast, mean)
+  df$state_id <- tolower(s) 
+  df$variable <- m
+  
+  # compute incidence
+  if (grepl("epi", m)) {
+    df <- df %>%
+      rename(m = forecast) %>%
+      comp_inc(m) %>%
+      rename(forecast = m) %>%
+      dplyr::select(-pop)
+  }
+  
+  return(df)
 }))
 
-mean10_pl <- mean10 %>% mutate(value = ifelse(value > max_inc, max_inc, value)) %>%
-  ggplot(mapping = aes(x = date, y = value, color = variable)) +
-  facet_wrap(~ id, ncol = 3, scales = "free_x") +
-  geom_line(alpha = .5) +
+# compute rolling mean
+mean10 <- mean10 %>%
+  mutate(forecast = ifelse(forecast > max_inc, max_inc, forecast)) %>% 
+  mutate(variable = recode(variable, !!! model_names)) %>%
+  mutate(state_id = recode(state_id, !!! state_names)) %>%
+  rename(value = forecast, target = incidence) %>%
+  mutate_at(vars(value, target), ~ zoo::rollmean(., k = 7, fill = NA, align = "right")) %>%
+  na.omit() 
+  
+# plot
+mean10_pl <- mean10 %>%
+  ggplot() +
+  geom_line(mapping = aes(x = date, y = value, color = variable), alpha =.5) +
   scale_color_manual(values = c("black", mcols)) +
+  facet_wrap(~ state_id, ncol = 3, scales = "free_x") +
+  geom_line(mapping = aes(x = date, y = target), color = "black") +
   scale_y_continuous(limits = c(0, max_inc), expand = c(0,0)) +
   scale_x_date(date_breaks = "1 month") +
   theme_bw2() +
