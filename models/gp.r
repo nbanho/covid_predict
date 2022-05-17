@@ -22,7 +22,7 @@ train_and_predict.gp <- function(...) {
   # input data
   n_data <- length(args$data$incidence)
   x1 <- 1:n_data
-  x2 <- (n_data+1):(n_data+n)
+  x2 <- (n_data+1):(n_data+args$n)
   data_list <- list(N1 = n_data, 
                     N2 = args$n,
                     y1 = log1p(args$data$incidence), 
@@ -44,7 +44,7 @@ train_and_predict.gp <- function(...) {
   )
   
   # extract predictions
-  y_pred <- cmdstan_model_fit$draws("y2") %>%
+  y_pred <- fit$draws("y2") %>%
     as_draws_df() %>%
     reshape2::melt(c(".draw", ".chain", ".iteration")) %>%
     mutate(variable = as.numeric(stringi::stri_extract(gsub("y2", "", variable), regex = "\\d+"))) %>%
