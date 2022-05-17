@@ -18,12 +18,12 @@ run_prediction <- function() {
   source("models/prophet.r")
   source("models/gp.r")
   
-  if (grepl("all", models)) {
+  if (grepl("all", models[1])) {
     models <- c("epiestim", "epinow2", "arima", "prophet", "gp")
   }
   
   # states
-  if (grepl("all", states)) {
+  if (grepl("all", states[1])) {
     states <- unique(stringi::stri_extract(list.files("data/us-selected-states/"), regex = "\\w{2}")) 
   } 
   
