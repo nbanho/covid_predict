@@ -28,8 +28,7 @@ source("utils/diagnostics.r")
 source("utils/delays.r")
 
 # EpiEstim
-source("models/cori.r")
-source("utils/predict.r")
+source("models/epiestim.r")
 
 # EpiNow2
 source("models/epinow2.r")
@@ -49,6 +48,12 @@ library(bayesplot)
 
 # Prophet
 source("models/prophet.r")
+
+# Train and predict
+source("utils/predict.r")
+
+# Scoring
+library(scoringutils)
 ```
 
 ## Data
@@ -498,6 +503,100 @@ plot.predict(dat_test$date, dat_test$y, pred_prophet0.40)
 
 
 ### iii. Gaussian Process
+
+```{r}
+# example data sets
+az <- df %>% dplyr::filter(state == "AZ")
+md <- df %>% dplyr::filter(state == "MD")
+
+# - exponential growth
+n <- 169
+eg <- az %>% slice((n-56-21+1):n)
+eg$horizon <- c(rep(0, 56), 1:21)
+plot(eg$cases[eg$horizon==0], type = "l")
+
+# - subexponential growth
+seg <- az %>% slice((300-56-21+1):300)
+seg$horizon <- c(rep(0, 56), 1:21)
+
+# - plateau
+pl <- az %>% slice((270-56-21+1):270)
+pl$horizon <- c(rep(0, 56), 1:21)
+
+# - subexponential decline
+sed <- md %>% slice((160-56-21+1):160)
+sed$horizon <- c(rep(0, 56), 1:21)
+
+# - exponential decline
+ed <- md %>% slice((400-56-21+1):400)
+ed$horizon <- c(rep(0, 56), 1:21)
+plot(ed$incidence)
+```
+
+```{r}
+# stan data
+sdl <- list(N1 = 56, N2 = 77,
+            x1 = 1:56, x2 = 1:77)
+
+# stan model
+gp_mod <- cmdstan_model("models/gp/short.stan")
+
+# - exponential growth
+sdl$y1 <- log1p(eg$incidence)[1:56]
+gp_mod_fit <- gp_mod$sample(data =  sdl, iter_sampling = 500, iter_warmup = 500, chains = 2)
+eg_test <- gp_mod_fit$draws("y2") %>%
+  as_draws_df() %>%
+  gather() %>%
+  mutate(horizon = as.numeric(stringi::stri_extract(gsub("y2", "", key), regex = "\\d+")) - sdl$N1) %>%
+  dplyr::filter(horizon >= 1) %>%
+  group_by(horizon) %>%
+  mutate(sample = 1:n()) %>%
+  ungroup() %>%
+  mutate(prediction = expm1(value)) %>%
+  dplyr::select(horizon, prediction, sample)
+eg_test <- eg %>%
+  rename(true_value = incidence) %>%
+  left_join(eg_test)
+plot_predictions(eg_test)
+
+# - exponential decline
+sdl$y1 <- log1p(ed$incidence)[1:56]
+gp_mod_fit_ed <- gp_mod$sample(data =  sdl, iter_sampling = 500, iter_warmup = 500, chains = 2)
+#gp_mod_fit_ed$summary(c("alpha0", "alpha1", "alpha2"))
+ed_test <- gp_mod_fit_ed$draws("y2") %>%
+  as_draws_df() %>%
+  gather() %>%
+  mutate(horizon = as.numeric(stringi::stri_extract(gsub("y2", "", key), regex = "\\d+")) - sdl$N1) %>%
+  dplyr::filter(horizon >= 1) %>%
+  group_by(horizon) %>%
+  mutate(sample = 1:n()) %>%
+  ungroup() %>%
+  mutate(prediction = expm1(value)) %>%
+  dplyr::select(horizon, prediction, sample)
+ed_test <- ed %>%
+  rename(true_value = incidence) %>%
+  left_join(ed_test)
+plot_predictions(ed_test)
+
+
+# - plateau
+sdl$y1 <- log1p(pl$incidence)[1:56]
+gp_mod_fit_pl <- gp_mod$sample(data =  sdl, iter_sampling = 500, iter_warmup = 500, chains = 2)
+pl_test <- gp_mod_fit_pl$draws("y2") %>%
+  as_draws_df() %>%
+  gather() %>%
+  mutate(horizon = as.numeric(stringi::stri_extract(gsub("y2", "", key), regex = "\\d+")) - sdl$N1) %>%
+  dplyr::filter(horizon >= 1) %>%
+  group_by(horizon) %>%
+  mutate(sample = 1:n()) %>%
+  ungroup() %>%
+  mutate(prediction = expm1(value)) %>%
+  dplyr::select(horizon, prediction, sample)
+pl_test <- pl %>%
+  rename(true_value = incidence) %>%
+  left_join(pl_test)
+plot_predictions(pl_test)
+```
 
 #### Under the hood
 

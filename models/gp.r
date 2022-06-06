@@ -29,12 +29,8 @@ train_and_predict.gp <- function(...) {
                     x1 = x1,
                     x2 = x2)
   
-  # tune parameters for prior
-  data_list$rho1_shape <- prior_par[prior_par[, 1]==n_data,2]
-  data_list$rho1_scale <- prior_par[prior_par[, 1]==n_data,3]
-  
   # fit model
-  gp_mod <- cmdstan_model("models/gp_week.stan", cpp_options = list(stan_threads = T))
+  gp_mod <- cmdstan_model("models/gp.stan", cpp_options = list(stan_threads = T))
   fit <- gp_mod$sample(
     data =  data_list,
     iter_sampling = args$d / 2,
@@ -47,7 +43,8 @@ train_and_predict.gp <- function(...) {
   y_pred <- fit$draws("y2") %>%
     as_draws_df() %>%
     reshape2::melt(c(".draw", ".chain", ".iteration")) %>%
-    mutate(variable = as.numeric(stringi::stri_extract(gsub("y2", "", variable), regex = "\\d+"))) %>%
+    mutate(variable = as.numeric(stringi::stri_extract(gsub("y2", "", variable), regex = "\\d+")) - data_list$N1) %>% 
+    dplyr::filter(variable >= 1) %>%
     dplyr::select(variable, .draw, value) %>%
     reshape2::dcast(variable ~ .draw) %>%
     dplyr::select(-variable) %>%
