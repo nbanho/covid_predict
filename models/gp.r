@@ -40,8 +40,7 @@ train_and_predict.gp <- function(...) {
   y_pred <- fit$draws("y2") %>%
     as_draws_df() %>%
     reshape2::melt(c(".draw", ".chain", ".iteration")) %>%
-    mutate(variable = as.numeric(stringi::stri_extract(gsub("y2", "", variable), regex = "\\d+")) - data_list$N1) %>% 
-    dplyr::filter(variable >= 1) %>%
+    mutate(variable = as.numeric(stringi::stri_extract(gsub("y2", "", variable), regex = "\\d+"))) %>% 
     dplyr::select(variable, .draw, value) %>%
     reshape2::dcast(variable ~ .draw) %>%
     dplyr::select(-variable) %>%
