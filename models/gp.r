@@ -2,9 +2,6 @@
 library(cmdstanr)
 library(posterior)
 
-# tuned hyperparameters for the medium-term GP
-prior_par <- readRDS("models/gp_prior_par.rds")
-
 #' @title train and predict using Gaussian process
 #' 
 #' @param ... args$data: data.frame with columns date, cases, incidence; 
