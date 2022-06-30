@@ -44,8 +44,9 @@ read_n_ahead_forecasts <- function(files, n) {
     mutate(state = recode(state_id, !!! state_names)) 
 }
 
-compute_forecast_score <- function(files, ...) { 
+compute_forecast_score <- function(files, sum_by = NULL, ...) { 
   do.call(rbind, map(files, function(f) {
+    print(sprintf("Compute score for file %s", f))
     # read model name
     m <- read_model(f)
   
@@ -62,23 +63,39 @@ compute_forecast_score <- function(files, ...) {
         return(D)
       })
     }
-  
-    # compute score
-    df$data <- lapply(df$data, function(D) {
-      D$forecast <- lapply(D$forecast, function(x) ifelse(x > max_inc, max_inc, x))
-      D$value <- pred_score(D$forecast, D$incidence, ...)
-      return(D %>% dplyr::select(-forecast))
-    })
-  
+    
     # add n_ahead
     df <- add_n_ahead(df)
   
+    # compute score
+    if (is.null(sum_by)) {
+      df$data <- lapply(df$data, function(D) {
+        D$value <- pred_score(D$forecast, D$incidence, ...)
+        return(D %>% dplyr::select(-forecast))
+      })
+    } else {
+      df <- df %>%
+        dplyr::select(-state,-forecast_date) %>%
+        unnest(cols = c("data")) %>%
+        mutate(n = as.integer(cut(n, sum_by))) %>%
+        group_by(date, n) %>%
+        summarize(incidence = sum(incidence),
+                  forecast = list(colSums(do.call(rbind, forecast)))) %>%
+        ungroup()
+      df$value <- pred_score(df$forecast, df$incidence, ...)
+      df <- dplyr::select(df, -forecast)
+    }
+  
     # unnest and add info
-    df <- df %>%
-      unnest(cols = c("data")) %>%
+    if(is.null(sum_by)) {
+      df <- df %>%
+        unnest(cols = c("data")) 
+    }
+   df <- df %>%
       mutate(state_id = tolower(s),
              variable = m) %>%
       mutate(variable = recode(variable, !!! model_names)) %>%
+      mutate(variable = factor(variable, model_names)) %>%
       rename(target = incidence) %>%
       mutate(state = recode(state_id, !!! state_names)) 
   
@@ -116,19 +133,20 @@ pred_score <- function(
   ... # additional arguments to compute type of score
 ) {
   
-  if(is.null(y)) {y <- rep(NA, nrow(X))}
+  if(is.null(y)) {y <- rep(NA, length(x))}
   
   if (type == "calibration") {
     scoring_fct <- function(x, y) { ecdf(x)(y) }
   }
   else if (type == "sharpness") {
-    scoring_fct <- function(x, y = NULL, q) { quantile(x, 1-q) - quantile(x, q) }
+    scoring_fct <- function(x, y = NULL, q = NULL) { scoringutils::mad_sample(matrix(x, nrow = 1)) }
+      #quantile(x, 1-q, na.rm = T) - quantile(x, q) }
   } 
   else if (type == "crps") {
-    scoring_fct <- function(x, y) { scoringRules::crps_sample(y = y, dat = x) }
+    scoring_fct <- function(x, y) { scoringRules::crps_sample(y = y, dat = c(na.omit(x))) }
   } 
   else if (type == "logscore") {
-    scoring_fct <- function(x, y) { scoringRules::logs_sample(y = y, dat = x)}
+    scoring_fct <- function(x, y) { scoringRules::logs_sample(y = y, dat = c(na.omit(x))) }
   }
   else if (type == "bias") {
     scoring_fct <- function(x, y) { sum(x > y) / length(x) }
@@ -136,6 +154,9 @@ pred_score <- function(
   else if (type == "critical") {
     scoring_fct <- function(x, y = NULL, q) { sum(x > q) / length(x) }
   } 
+  else if (type == "coverage") {
+    scoring_fct <- function(x, y, q) {ifelse(y <= quantile(x, 1-q, na.rm = T), ifelse(y >= quantile(x, q, na.rm = T), 1, 0), 0)}
+  }
   
   score <- map2_dbl(x, y, scoring_fct, ...)
   
@@ -170,7 +191,10 @@ p_hotspot <- function(X, q = .25) {
 plot_predict <- function(
   dat, # the data frame with columns id, date, variable, value
   smoothing = NULL, # should date be smoothed? (default = NULL, i.e. no)
-  interval = TRUE # plot with uncertainty intervals
+  interval = TRUE, # plot with uncertainty intervals
+  nc = 2, # number of facet columns
+  direction = "h" # direction of facets
+  
 ) {
   
   # smoothing
@@ -203,7 +227,7 @@ plot_predict <- function(
       geom_line(data = dat_obse) +
       scale_fill_brewer() +
       scale_x_date(expand = c(0,0), breaks = "2 months", date_labels = "%b %y") +
-      facet_wrap(~ variable, ncol = 2) +
+      facet_wrap(~ variable, ncol = nc, dir = direction) +
       theme_bw2() +
       theme(axis.title.x = element_blank())
     
@@ -213,7 +237,7 @@ plot_predict <- function(
     pl <- ggplot(mapping = aes(x = date, y = value)) +
       geom_line(data = dat, mapping = aes(color = n)) +
       geom_line(data = dat_obse, color = "black") +
-      facet_wrap(~ variable, ncol = 2) +
+      facet_wrap(~ variable, ncol = nc, dir = direction) +
       scale_color_viridis_d() +
       scale_x_date(expand = c(0,0), breaks = "2 months", date_labels = "%b %y") +
       theme_bw2() +
