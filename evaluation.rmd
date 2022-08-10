@@ -48,7 +48,8 @@ phase_labs <- read_csv("data/us-selected-states_labeled-phases.csv") %>%
 
 phase_names <- c("exponential growth", "subexponential growth", "plateau", 
                 "subexponential decline", "exponential decline")
-phase_names_abrv <- c("Exponential\ngrowth", "Subexponential\ngrowth", "Plateau", "Subexponential\ndecline", "Exponential\ndecline")
+phase_names_abrv <- c("Exponential\ngrowth", "Subexponential\ngrowth", "Plateau", 
+                      "Subexponential\ndecline", "Exponential\ndecline")
 names(phase_names_abrv) <- phase_names
 
 # models

@@ -109,12 +109,3 @@ plot_delay_distr <- function(delay, distr = "lognormal", S = 100) {
     scale_fill_brewer() +
     scale_x_continuous(limits = c(0, delay$max))
 }
-
-
-# convert mean and sd to gamma parameters
-
-#' @param mu
-#' @param sigma
-#' 
-
-to_gamma.shape <- function(mu, sigma) {  }
