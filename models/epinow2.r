@@ -26,10 +26,14 @@ train_and_predict.epinow2 <- function(...) {
   #return(data)
   
   # fit model
+  rt_prior_mean <- exp(0.079+0.5*0.18^2)
+  rt_prior_sd <- rt_prior_mean * (exp(0.18^2) - 1)
   estimates <- epinow(reported_cases = data,
                       generation_time = generation_time,
                       delays = delay_opts(incubation_period, reporting_delay),
-                      gp = gp_opts(),
+                      rt = rt_opts(prior = list(mean = rt_prior_mean, sd = rt_prior_sd), 
+                                   use_breakpoints = F, pop = args$pop),
+                      gp = gp_opts(basis_prop = .2, ls_min = 3, alpha_sd = .1),
                       stan = stan_opts(samples = args$d, seed = args$seed),
                       horizon = args$n,
                       output = "samples")

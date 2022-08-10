@@ -18,6 +18,13 @@ run_prediction <- function() {
   source("models/prophet.r")
   source("models/gp.r")
   
+  # state population
+  cc <- covidcast::county_census %>%
+    dplyr::filter(COUNTY == 0) %>%
+    mutate(state_id = tolower(covidcast::fips_to_abbr(FIPS))) %>%
+    rename(pop = POPESTIMATE2019) %>%
+    dplyr::select(state_id, pop)
+  
   if (grepl("all", models[1])) {
     models <- c("epiestim", "epinow2", "arima", "prophet", "gp")
   }
@@ -42,7 +49,9 @@ run_prediction <- function() {
           predicted <- matrix(0, nrow = n_preds, ncol = n_draws)
         } else {
           # train and predict
-          predicted <- train_and_predict(model = mod, data = train_df_state$data[[k]], seed = seed12345, n = n_preds, d = n_draws)
+          predicted <- train_and_predict(model = mod, data = train_df_state$data[[k]], 
+                                         seed = seed12345, n = n_preds, d = n_draws,
+                                         pop = cc$pop[toupper(cc$state_id) == state])
         }
         test_df_state$data[[k]]$forecast <- get_samples(predicted, test_df_state$data[[k]], k)
       }

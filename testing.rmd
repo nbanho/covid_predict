@@ -60,6 +60,7 @@ library(scoringutils)
 
 ```{r}
 df <- readRDS("data/us-selected-states_ts-date.rds")
+
 ```
 
 ## Mechanistic models
@@ -195,10 +196,9 @@ data <- df %>%
 estimates <- epinow(reported_cases = data %>% dplyr::select(date, cases) %>% rename(confirm = cases),
                     generation_time = generation_time,
                     delays = delay_opts(incubation_period, reporting_delay),
-                    # rt = rt_opts(prior = list(mean = 1, sd = 1), 
-                    #              rw = 7,
-                    #              use_breakpoints = F),
-                    gp = gp_opts(),
+                    rt = rt_opts(prior = list(mean = exp(0.079+0.5*0.18^2), sd = exp(0.079+0.5*0.18^2)*(exp(0.18^2) - 1)), 
+                                 use_breakpoints = F, pop = 19453561),
+                    gp = gp_opts(basis_prop = .2, ls_min = 3, alpha_sd = .1),
                     stan = stan_opts(cores = 4),
                     horizon = 21,
                     output = "samples")
