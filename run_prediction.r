@@ -19,11 +19,7 @@ run_prediction <- function() {
   source("models/gp.r")
   
   # state population
-  cc <- covidcast::county_census %>%
-    dplyr::filter(COUNTY == 0) %>%
-    mutate(state_id = tolower(covidcast::fips_to_abbr(FIPS))) %>%
-    rename(pop = POPESTIMATE2019) %>%
-    dplyr::select(state_id, pop)
+  cc <- read_csv("data/us-census-population.csv")
   
   if (grepl("all", models[1])) {
     models <- c("epiestim", "epinow2", "arima", "prophet", "gp")
