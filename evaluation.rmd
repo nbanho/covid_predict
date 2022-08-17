@@ -50,7 +50,10 @@ phase_names <- c("exponential growth", "subexponential growth", "plateau",
                 "subexponential decline", "exponential decline")
 phase_names_abrv <- c("Exponential\ngrowth", "Subexponential\ngrowth", "Plateau", 
                       "Subexponential\ndecline", "Exponential\ndecline")
+phase_names_abrv2 <- c("Exponential growth", "Subexponential growth", "Plateau", 
+                      "Subexponential decline", "Exponential decline")
 names(phase_names_abrv) <- phase_names
+names(phase_names_abrv2) <- phase_names
 
 # models
 models <- c("epiestim", "epinow2", "epidemia", "arima", "prophet", "gp")
@@ -468,17 +471,15 @@ save_plot(bias_pl_wtitle, "results/bias.png", w = 8, h = 8)
 ### Summary plot
 
 ```{r}
-# p1_descr <- mCalib_pl + labs(title = "a")
-# p2_descr <- pCalib_pl + theme(legend.position = "none") + labs(title = "b")
-# p3_descr <- sharp_pl + theme(legend.position = "none") + labs(title = "c")
-# p4_descr <- bias_pl + theme(legend.position = "none") + labs(title = "d")
-p1_descr <- cov50_pl + guides(color = guide_legend(nrow = 2, byrow = T)) + labs(title = "a")
-p2_descr <- cov90_pl + guides(color = guide_legend(nrow = 2, byrow = T)) + labs(title = "b")
-p3_descr <- sharp_pl + theme(legend.position = "none") + labs(title = "c")
-p4_descr <- bias_pl + theme(legend.position = "none") + labs(title = "d")
-csb_summary_pl <- grid.arrange(grid.arrange(p1_descr, p2_descr, ncol = 2), 
-                               grid.arrange(p3_descr, p4_descr, ncol = 2),
-                               ncol = 1, widths = 12, heights = c(7,5))
+p1_descr <- pCalib_pl + guides(color = guide_legend(nrow = 1, byrow = T)) + labs(title = "a")
+p2_descr <- cov50_pl + theme(legend.position = "none") + labs(title = "b")
+p3_descr <- cov90_pl + theme(legend.position = "none") + labs(title = "c")
+p4_descr <- sharp_pl + theme(legend.position = "none") + labs(title = "d")
+p5_descr <- bias_pl + theme(legend.position = "none") + labs(title = "e")
+csb_summary_pl <- grid.arrange(grid.arrange(p1_descr, ncol = 1),
+                               grid.arrange(p2_descr, p3_descr, ncol = 2), 
+                               grid.arrange(p4_descr, p5_descr, ncol = 2),
+                               ncol = 1, widths = 12, heights = c(7,5,5))
 
 save_plot(csb_summary_pl, "results/descriptives.pdf", w = 16, h = 18)
 ```
@@ -494,35 +495,36 @@ save_plot(csb_summary_pl, "results/descriptives.pdf", w = 16, h = 18)
 # compute CRPS
 df_crps <- compute_forecast_score(files, sum_by = c(0,7,14,21), type = "crps")
 df_crps$n <- paste("Week", df_crps$n)
-df_crps <- dplyr::filter(df_crps, !is.na(q))
 
 # handle outliers
-x_outl <- 1e5
+x_outl <- 1e3
 df_crps$value2 <- ifelse(df_crps$value > x_outl, x_outl, df_crps$value)
 
 # quantiles
-df_crps <- df_crps %>%
-  group_by(n, variable) %>%
-  mutate(q = as.integer(cut(value2, quantile(value2, c(0, 0.25, 0.5, 0.75, 1))))) %>%
-  ungroup()
+# df_crps <- df_crps %>%
+#   group_by(n, variable) %>%
+#   mutate(q = as.integer(cut(value2, quantile(value2, c(0, 0.25, 0.5, 0.75, 1))))) %>%
+#   ungroup()
 
 # summaries
 df_crps_sum <- df_crps %>%
   group_by(n, variable) %>%
-  summarize(Median = median(value)) %>%
+  summarize(Median = median(value),
+            Mean = mean(value)) %>%
   ungroup() 
 
 # plot
 crps_hist_pl <- ggplot() +
-  geom_histogram(data = df_crps, mapping = aes(x = value2+1, fill = factor(q, levels = 1:4)), color = "gray", size = .33) +
+  geom_histogram(data = df_crps, mapping = aes(x = value2+1), color = "gray", size = .33) +
   facet_grid(rows = vars(variable), cols = vars(n), switch = "y") +
-  scale_x_log10(breaks = c(1, 1e1, 1e2, 1e3, 1e4, 1e5), 
+  scale_x_log10(breaks = c(1, 1e1, 1e2, 1e3), 
                 limits = c(1, NA),
-                labels = c("0", "10", "100", "1e3", "1e4", ">1e5")) +
+                labels = c("0", "10", "100", ">1,000")) +
   scale_fill_brewer() +
-  labs(x = "CRPS", fill = "Quantile") +
-  geom_vline(data = df_crps_sum, mapping = aes(xintercept = Median, y = 100), color = "black", linetype = "dashed", alpha = .5) +
-  geom_point(data = df_crps_sum, mapping = aes(x = Median, y = 100), fill = "black", shape = 22) +
+  labs(x = "CRPS") +
+  geom_vline(data = df_crps_sum, mapping = aes(xintercept = Median, y = 100), 
+             color = "blue", linetype = "dashed", alpha = .5) +
+  geom_point(data = df_crps_sum, mapping = aes(x = Median, y = 100), fill = "lightblue", shape = 22) +
   theme_bw2() +
   theme(axis.title.y = element_blank(), legend.position = "bottom", legend.key.size = unit(0.2, "cm")) 
 
@@ -557,6 +559,7 @@ save_plot(crps_hist_pl, "results/crps_by_week.pdf", w = 16, h = 12)
 ```{r}
 # compute CRPS across days
 df_crps_tot <- compute_forecast_score(files, sum_by = c(0,21), type = "crps")
+df_crps_tot$n <- paste("Week", df_crps_tot$n)
 
 # summarize crps by phase
 crps_by_phase <- df_crps_tot %>%
@@ -565,12 +568,8 @@ crps_by_phase <- df_crps_tot %>%
               dplyr::select(-start_date, -end_date) %>% 
               rename(state_id=state) %>% 
               mutate(state_id = tolower(state_id))) %>%
-  mutate(epidemic_phase = recode(as.character(epidemic_phase), !!! phase_names_abrv)) %>%
-  mutate(epidemic_phase = factor(epidemic_phase, levels = phase_names_abrv)) %>%
-  group_by(epidemic_phase, variable) %>%
-  mutate(q = as.integer(cut(value2, quantile(value2, c(0, 0.25, 0.5, 0.75, 1))))) %>%
-  ungroup() %>%
-  dplyr::filter(!is.na(q))
+  mutate(epidemic_phase = recode(as.character(epidemic_phase), !!! phase_names_abrv2)) %>%
+  mutate(epidemic_phase = factor(epidemic_phase, levels = phase_names_abrv2))
 
 crps_by_phase_sum <- crps_by_phase %>%
   group_by(epidemic_phase, variable) %>%
@@ -578,23 +577,18 @@ crps_by_phase_sum <- crps_by_phase %>%
   ungroup() 
 
 # plot crps by phase
-crps_by_phase_pl <- ggplot() +
-  geom_histogram(data = crps_by_phase, mapping = aes(x = value2+1, fill = factor(q, levels = 1:4)), color = "gray", size = .33) +
-  facet_grid(rows = vars(variable), cols = vars(epidemic_phase), switch = "y") +
-  scale_x_log10(breaks = c(1, 1e1, 1e2, 1e3, 1e4, 1e5), 
-                limits = c(1, NA),
-                labels = c("0", "10", "100", "1e3", "1e4", ">1e5")) +
-  scale_fill_brewer() +
-  labs(x = "CRPS", fill = "Quantile") +
-  geom_vline(data = crps_by_phase_sum, mapping = aes(xintercept = Median, y = 25), color = "black", linetype = "dashed", alpha = .5) +
-  geom_point(data = crps_by_phase_sum, mapping = aes(x = Median, y = 25), fill = "black", shape = 22) +
+crps_by_phase_pl <- crps_by_phase_sum %>%
+  ggplot(aes(x = variable, y = Median)) +
+  facet_wrap(~ epidemic_phase, ncol = 2) +
+  scale_y_continuous(expand = c(0,10)) +
+  labs(y = "Median CRPS") +
+  geom_bar(stat = "identity") +
   theme_bw2() +
-  theme(axis.title.y = element_blank(), axis.text.x = element_text(angle = 90),
-        legend.position = "bottom", legend.key.size = unit(0.2, "cm"))
+  theme(axis.title.x = element_blank())
 
 crps_by_phase_pl 
 
-save_plot(crps_by_phase_pl, "results/crps_by_phase.pdf", w = 16, h = 12)
+save_plot(crps_by_phase_pl, "results/crps_by_phase.pdf", w = 14, h = 10)
 ```
 
 
@@ -603,25 +597,24 @@ save_plot(crps_by_phase_pl, "results/crps_by_phase.pdf", w = 16, h = 12)
 ```{r}
 # summarize crps by state
 df_crps_by_state_sum <- df_crps %>%
-  group_by(state, state_id, variable, n) %>%
-  summarize(value = mean(value)) %>%
-  ungroup()
+  group_by(state, state_id, variable) %>%
+  summarize(Median = median(value2)) %>%
+  ungroup() 
 
 # plot crps by state
 crps_by_state_pl <- df_crps_by_state_sum %>%
-  ggplot(aes(x = n, y = value, color = variable)) +
-  facet_wrap(~ state) +
-  geom_line() +
-  geom_point(shape = 1) +
-  scale_y_continuous(expand = c(0,0), limits = c(0, 60)) +
-  scale_x_continuous(minor_breaks = seq(0,21,1), expand = c(0,0), breaks = c(1,7,14,21), limits = c(0.5,21.5)) +
-  labs(y = "Average CRPS", x = "Number of days forecasted ahead") +
+  ggplot(aes(x = variable, y = Median)) +
+  facet_wrap(~ state, ncol = 2) +
+  scale_y_continuous(expand = c(0,0), limits = c(0,70)) +
+  geom_bar(stat="identity") +
+  labs(y = "Median CRPS", x = "Number of days forecasted ahead") +
   theme_bw2() +
-  theme(legend.title = element_blank())
+  theme(legend.title = element_blank()) +
+  theme(axis.title.x = element_blank())
 
 crps_by_state_pl
 
-save_plot(crps_by_state_pl, "results/skill_by_state.pdf", w = 16, h = 12)  
+save_plot(crps_by_state_pl, "results/crps_by_state.pdf", w = 14, h = 10)  
 ```
 
 ### Hotspot prediction
@@ -676,12 +669,41 @@ sum(df_prop$hot==1, na.rm = T) / nrow(df_prop)
 #### AUC
 
 ```{r}
+sens <- function(true, pred) {roc(true, pred, levels = c(0, 1), direction = "<")$sensitivities} 
+inv_spec <- function(true, pred) {1-roc(true, pred, levels = c(0, 1), direction = "<")$specificities} 
+
 # compute auc
 df_hot_auc <- df_hot %>%
   filter(!is.na(hot)) %>% # remove change in incidence < 0.25
+  mutate(week = paste0("Week ", ifelse(n <= 7, 1, ifelse(n <= 14, 2, 3)))) %>%
   group_by(n, variable) %>%
   summarize(AUC = auc(hot, prob_hot)[1]) %>%
-  ungroup() 
+  ungroup() %>%
+  mutate(variable = factor(variable, levels = model_names))
+
+# # compute roc
+# df_roc <- df_hot %>%
+#   filter(!is.na(hot)) %>% # remove change in incidence < 0.25
+#   mutate(week = paste0("Week ", ifelse(n <= 7, 1, ifelse(n <= 14, 2, 3)))) %>%
+#   group_by(week, variable) %>%
+#   summarize(sensitivity = sens(hot, prob_hot),
+#             inv_specificity = inv_spec(hot, prob_hot)) %>%
+#   ungroup() %>%
+#   left_join(df_hot_auc) %>%
+#   mutate(variable = paste0(variable, " (AUC = ", round(100 * AUC), ")")) 
+# 
+# # plot roc
+# df_roc %>%
+#   ggplot(aes(x = inv_specificity, y = sensitivity, color = variable)) +
+#   facet_wrap(~ week) +
+#     geom_path() +
+#     geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "black") +
+#     scale_x_continuous(expand = c(0,0), limits = c(0, 1), breaks = seq(0, 1, .2), labels = function(x) x * 100) +
+#     scale_y_continuous(expand = c(0,0), limits = c(0, 1), breaks = seq(0, 1, .2), labels = function(x) x * 100) +
+#     labs(x = "1-Specificity", y = "Sensitivity") +
+#     theme_bw2() +
+#     theme(legend.position = "right", legend.key.height = unit(.275, "cm"), legend.title = element_blank())
+  
 
 # plot auc
 df_hot_auc_pl <- df_hot_auc %>%
@@ -694,94 +716,85 @@ df_hot_auc_pl <- df_hot_auc %>%
   scale_y_continuous(breaks = seq(0.4, 0.8, .1), labels = function(x) x * 100) +
   labs(x = "Number of days forecasted ahead", 
        y = "AUC (%)") +
-  theme_bw2() +
+  theme_bw() +
   theme(legend.title = element_blank()) 
   
-df_hot_auc_pl
+df_hot_auc_pl 
 
-df_hot_auc_pl_wtitle <- df_hot_auc_pl +
-  labs(title = "Hotspot",
-       subtitle = "AUC for hotspot pred. by model and n-day forecast")
-
-save_plot(df_hot_auc_pl_wtitle, "results/hotspot.png", w = 8, h = 8)
+save_plot(df_hot_auc_pl, "results/hotspot.pdf", w = 12, h = 8)
 ```
 
-#### Sensitivity
+<!-- #### Sensitivity -->
 
-```{r}
-# compute sensitivity
-sensitivity.topleft <- function(obs, pred) {
-  c(coords(roc(obs,pred), best.method="topleft", x="best")["sensitivity"])
-} 
+<!-- ```{r} -->
+<!-- # compute sensitivity -->
+<!-- sensitivity.topleft <- function(obs, pred) { -->
+<!--   c(coords(roc(obs,pred), best.method="topleft", x="best")["sensitivity"]) -->
+<!-- }  -->
 
-df_hot_sens <- df_hot %>%
-  filter(!is.na(hot)) %>%
-  group_by(n, variable) %>%
-  summarize(sens = unlist(sensitivity.topleft(hot, prob_hot))) %>%
-  ungroup()
+<!-- df_hot_sens <- df_hot %>% -->
+<!--   filter(!is.na(hot)) %>% -->
+<!--   group_by(n, variable) %>% -->
+<!--   summarize(sens = unlist(sensitivity.topleft(hot, prob_hot))) %>% -->
+<!--   ungroup() -->
 
-# plot sensitivity
-df_hot_sens_pl <- df_hot_sens %>%
-  ggplot(aes(x = n, y = sens, color = variable)) +
-  geom_point(shape = 1) +
-  geom_line() +
-  geom_hline(aes(yintercept = 0.5), linetype = "dashed") +
-  scale_color_manual(values = mcols) +
-  scale_x_continuous(minor_breaks = seq(0,21,1), expand = c(0,0), breaks = c(8,14,21), limits = c(7.5,21.5)) +
-  scale_y_continuous(breaks = seq(0.4, 0.8, .1), labels = function(x) x * 100) +
-  labs(x = "Number of days forecasted ahead", 
-       y = "Sensitivity (%)") +
-  theme_bw2() +
-  theme(legend.title = element_blank()) 
-  
-df_hot_sens_pl
-```
+<!-- # plot sensitivity -->
+<!-- df_hot_sens_pl <- df_hot_sens %>% -->
+<!--   ggplot(aes(x = n, y = sens, color = variable)) + -->
+<!--   geom_point(shape = 1) + -->
+<!--   geom_line() + -->
+<!--   geom_hline(aes(yintercept = 0.5), linetype = "dashed") + -->
+<!--   scale_color_manual(values = mcols) + -->
+<!--   scale_x_continuous(minor_breaks = seq(0,21,1), expand = c(0,0), breaks = c(8,14,21), limits = c(7.5,21.5)) + -->
+<!--   scale_y_continuous(breaks = seq(0.4, 0.8, .1), labels = function(x) x * 100) + -->
+<!--   labs(x = "Number of days forecasted ahead",  -->
+<!--        y = "Sensitivity (%)") + -->
+<!--   theme_bw2() + -->
+<!--   theme(legend.title = element_blank())  -->
 
-#### Specificity
+<!-- df_hot_sens_pl -->
+<!-- ``` -->
 
-```{r}
-# compute specificity
-specificity.topleft <- function(obs, pred) {
-  c(coords(roc(obs,pred), best.method="topleft", x="best")["specificity"])
-} 
+<!-- #### Specificity -->
 
-df_hot_spec <- df_hot %>%
-  filter(!is.na(hot)) %>%
-  group_by(n, variable) %>%
-  summarize(spec = unlist(specificity.topleft(hot, prob_hot))) %>%
-  ungroup()
+<!-- ```{r} -->
+<!-- # compute specificity -->
+<!-- specificity.topleft <- function(obs, pred) { -->
+<!--   c(coords(roc(obs,pred), best.method="topleft", x="best")["specificity"]) -->
+<!-- }  -->
 
-# plot specificity
-df_hot_spec_pl <- df_hot_spec %>%
-  ggplot(aes(x = n, y = spec, color = variable)) +
-  geom_point(shape = 1) +
-  geom_line() +
-  geom_hline(aes(yintercept = 0.5), linetype = "dashed") +
-  scale_color_manual(values = mcols) +
-  scale_x_continuous(minor_breaks = seq(0,21,1), expand = c(0,0), breaks = c(8,14,21), limits = c(7.5,21.5)) +
-  scale_y_continuous(breaks = seq(0.4, 0.8, .1), labels = function(x) x * 100) +
-  labs(x = "Number of days forecasted ahead", 
-       y = "Specificity (%)") +
-  theme_bw2() +
-  theme(legend.title = element_blank()) 
-  
-df_hot_spec_pl
-```
+<!-- df_hot_spec <- df_hot %>% -->
+<!--   filter(!is.na(hot)) %>% -->
+<!--   group_by(n, variable) %>% -->
+<!--   summarize(spec = unlist(specificity.topleft(hot, prob_hot))) %>% -->
+<!--   ungroup() -->
 
-### Summary plot
+<!-- # plot specificity -->
+<!-- df_hot_spec_pl <- df_hot_spec %>% -->
+<!--   ggplot(aes(x = n, y = spec, color = variable)) + -->
+<!--   geom_point(shape = 1) + -->
+<!--   geom_line() + -->
+<!--   geom_hline(aes(yintercept = 0.5), linetype = "dashed") + -->
+<!--   scale_color_manual(values = mcols) + -->
+<!--   scale_x_continuous(minor_breaks = seq(0,21,1), expand = c(0,0), breaks = c(8,14,21), limits = c(7.5,21.5)) + -->
+<!--   scale_y_continuous(breaks = seq(0.4, 0.8, .1), labels = function(x) x * 100) + -->
+<!--   labs(x = "Number of days forecasted ahead",  -->
+<!--        y = "Specificity (%)") + -->
+<!--   theme_bw2() + -->
+<!--   theme(legend.title = element_blank())  -->
 
-```{r}
-perf_sum_pl <- grid.arrange(crps_by_phase_pl + labs(title = "a"), 
-                            grid.arrange(df_hot_pl + theme(legend.position = "none") + labs(title = "b"),
-                                         df_hot_sens_pl + theme(legend.position = "none") + labs(title = " "), 
-                                         df_hot_spec_pl + theme(legend.position = "none") + labs(title = " "),
-                                         ncol = 3),
-                            ncol = 1, widths = 16, heights = c(12, 6))
+<!-- df_hot_spec_pl -->
+<!-- ``` -->
 
-save_plot(perf_sum_pl, "results/performance.pdf", w = 16, h = 18)
-```
+<!-- ### Summary plot -->
 
+<!-- ```{r} -->
+<!-- perf_sum_pl <- grid.arrange(crps_by_phase_pl + labs(title = "a"),  -->
+<!--                             grid.arrange(df_hot_pl + theme(legend.position = "none") + labs(title = "b"), -->
+<!--                                          df_hot_sens_pl + theme(legend.position = "none") + labs(title = " "),  -->
+<!--                                          df_hot_spec_pl + theme(legend.position = "none") + labs(title = " "), -->
+<!--                                          ncol = 3), -->
+<!--                             ncol = 1, widths = 16, heights = c(12, 6)) -->
 
-```{r}
-
-```
+<!-- save_plot(perf_sum_pl, "results/performance.pdf", w = 16, h = 18) -->
+<!-- ``` -->

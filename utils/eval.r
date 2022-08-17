@@ -149,7 +149,7 @@ pred_score <- function(
     scoring_fct <- function(x, y) { scoringRules::logs_sample(y = y, dat = c(na.omit(x))) }
   }
   else if (type == "bias") {
-    scoring_fct <- function(x, y) { sum(x > y) / length(x) }
+    scoring_fct <- function(x, y) { sum(x > y, na.rm = T) / length(x[!is.na(x)]) }
   } 
   else if (type == "critical") {
     scoring_fct <- function(x, y = NULL, q) { sum(x > q) / length(x) }
