@@ -16,64 +16,73 @@ knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
 library(reshape2)
 library(lubridate)
-library(grid)
-library(gridExtra)
-library(covidcast)
-library(RColorBrewer)
 
 # utils
 source("utils/eval.r")
-source("utils/delays.r")
-
-# helper
 source("helper/plotting.r")
 
-# settings
-max_inc = 300
+# models
+models <- c("epiestim", "epinow2", "epidemia", "arima", "prophet", "gp")
+model_names <- c("EpiEstim", "EpiNow2", "Epidemia", "ARIMA", "Prophet", "GP")
+names(model_names) <- models
+
+# states
+states <- c("az","ca","il","md","nj","ny")
+state_names <- c("Arizona", "California", "Illinois", 
+                 "Maryland", "New Jersey", "New York")
+names(state_names) <- states
 ```
 
-## Cori
+## EpiEstim
 
 ### Data
 
 ```{r}
-files_cori <- list.files("predictions/experiment_cori/", full.names = T)
-models_cori = c("cori7", "cori14", "cori21")
+files_epiestim <- list.files("predictions/experiment_epiestim/", full.names = T)
+tau = c(1,3,5,7,14,21)
 ```
 
 ### Results
 
 ```{r}
 # compute scores
-scores_cori <- do.call(rbind, map(files_cori, function(f) {
-  print(sprintf("Processing file %s", f))
-  read_files(f) %>% add_pred_score(f, models = models_cori, 
-                                   type = "crps", trans = function(x) {x[x>max_inc] <- max_inc; return(x)})
-}))
+scores_epiestim <- tibble()
+for (f in 1:length(files_epiestim)) {
+  df <- readRDS(files_epiestim[f])
+  s <- gsub(".rds", "", basename(files_epiestim[f]))
+  m <- "epiestim"
+  for (t in tau) {
+    df_t <- df %>% mutate(data = map(data, function(D) 
+      D %>% 
+        select(all_of(c("date", "cases", "incidence", paste0("epiestim", t)))) %>%
+        set_names(c("date", "cases", "incidence", "forecast"))))
+    crps <- compute_forecast_score(df = df_t, m = m, s = s, sum_by = c(1,7,14,21)) %>%
+      mutate(tau = t)
+    scores_epiestim <- rbind(scores_epiestim, crps)
+  }
+}
 
 # summarize scores
-scores_cori_sum <- scores_cori %>%
-  dplyr::select(n, models_cori) %>%
-  melt("n") %>%
-  group_by(n, variable) %>%
+scores_epiestim_sum <- scores_epiestim %>%
+  group_by(n, tau) %>%
   summarize(value = mean(value)) %>%
   ungroup()
 
 # plot 
-cori_pl <- scores_cori_sum %>%
-  ggplot(aes(x = n, y = value, color = variable)) +
+epiestim_pl <- scores_epiestim_sum %>%
+  ggplot(aes(x = n, y = value, color = factor(tau))) +
   geom_line() +
   geom_point(shape = 1) +
-  scale_x_continuous(minor_breaks = seq(0,21,1), expand = c(0,0), breaks = c(1,7,14,21), limits = c(0.5,21.5)) +
-  scale_y_continuous(expand = c(0,0), limits = c(0,35)) +
-  scale_color_manual(values = brewer.pal(9,"Greens")[rev(c(3,6,9))],
-                     labels = expression("EpiEstim("*tau*" = "*1*" week)","EpiEstim("*tau*" = "*2*" weeks)","EpiEstim("*tau*" = "*3*" weeks)")) +
-  labs(x = "Number of days forecasted ahead", 
-       y = "Average CRPS") +
+  scale_x_continuous(breaks = seq(1,3)) +
+  scale_color_brewer() +
+  labs(y = "Average CRPS", color = expression("EpiEstim with "*tau*":")) +
   theme_bw2() +
-  theme(legend.title = element_blank())
+  theme(axis.title.x = element_blank()) +
+  guides(color = guide_legend(nrow = 2))
 
-save_plot(cori_pl, "results/experiments_cori.pdf", w = 12, h = 8)
+epiestim_pl
+
+save_plot(epiestim_pl, "results/experiments_epiestim.pdf", w = 8, h = 6)
 ```
 
 
