@@ -6,6 +6,7 @@ library(incidence)
 
 # utilities
 source("utils/delays.r")
+source("utils/prior_R.R")
 
 #' @title train and predict using EpiEstim
 #' 
@@ -45,7 +46,9 @@ train_and_predict.epiestim <- function(tau, ...) {
     min_std_si = generation_time$sd - 3 * generation_time$sd_sd,
     max_std_si = generation_time$sd + 3 * generation_time$sd_sd,
     n1 = cori.n1,
-    n2 = cori.n2
+    n2 = cori.n2,
+    mean_prior = rt_prior_mean,
+    std_prior = rt_prior_sd
   )
   
   # estimate R over time

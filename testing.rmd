@@ -27,6 +27,9 @@ source("utils/diagnostics.r")
 # delays
 source("utils/delays.r")
 
+# prior for R
+source("utils/prior_R.R")
+
 # EpiEstim
 source("models/epiestim.r")
 
@@ -60,10 +63,12 @@ library(scoringutils)
 
 ```{r}
 df <- readRDS("data/us-selected-states_ts-date.rds")
-
+cc <- read_csv("data/us-census-population.csv")
 ```
 
 ## Mechanistic models
+
+### Delay distributions
 
 ```{r}
 # delay distributions
@@ -75,6 +80,20 @@ plot_delay_distr(incubation_period)
 
 # - reporting delay
 plot_delay_distr(reporting_delay)
+```
+
+### Prior for R
+
+```{r}
+mu <- 0.079
+sigma <- 0.18
+rt_prior_mean <- exp(mu+0.5*sigma^2)
+rt_prior_sd <- rt_prior_mean * (exp(sigma^2) - 1)
+rt_prior_scale <- rt_prior_sd / rt_prior_mean
+rt_prior_shape <- rt_prior_mean / rt_prior_scale
+
+plot(x = seq(0,3,.1), y = dlnorm(seq(0,3,.1), mu, sigma), type = "l")
+lines(x = seq(0,3,.1), y = dgamma(seq(0,3,.1), shape = rt_prior_shape, scale = rt_prior_scale), col = "red")
 ```
 
 ### i. EpiEstim 
@@ -153,31 +172,15 @@ data <- df %>%
   arrange(date) %>%
   slice(30:(30+56-1))
 
-# train
-cori.fit7 <- train.cori(data$cases, tau = 7, n1 = 45, n2 = 45)
-plot(cori.fit7$eR)
-cori.fit14 <- train.cori(data$cases, tau = 14)
-plot(cori.fit14$eR)
-cori.fit21 <- train.cori(data$cases, tau = 21)
-plot(cori.fit21$eR)
+ex_pred <- train_and_predict("epiestim", data = data, seed = 12345, d = 10, n = 21) %>%
+  data.frame() %>%
+  mutate(k = 1:21) %>%
+  reshape2::melt("k") %>%
+  mutate(variable = as.numeric(gsub("X", "", variable)))
 
-# predict
-cori.proj7 <- predict.cori(estimate_R_obj = cori.fit7)
-cori.proj14 <- predict.cori(estimate_R_obj = cori.fit14)
-cori.proj21 <- predict.cori(estimate_R_obj = cori.fit21)
-
-# compare
-# combine data
-cori_proj <- rbind(mat_to_long(cori.proj7, "cori-7"), 
-                   mat_to_long(cori.proj14, "cori-14"), 
-                   mat_to_long(cori.proj21, "cori-21"))  %>%
-  mutate(var = factor(var, levels = c("cori-7", "cori-14", "cori-21")))
-  
-
-# plot
-ggplot(cori_proj, aes(x = key, y = value)) +
-  facet_wrap(~ var) +
-  stat_lineribbon()
+ex_pred %>%
+  ggplot(aes(x = k, y = value, group = variable, color = factor(variable))) +
+  geom_line()
 ```
 
 
@@ -215,25 +218,16 @@ data <- df %>%
   arrange(date) %>%
   slice(30:(30+56-1))
 
-# train
-epi_obj <- train.epinow2(data, n = 21)
+ex_pred <- train_and_predict("epinow2", data = data, seed = 12345, d = 10, n = 21,
+                             pop = cc$pop[cc$state_id=="ny"]) %>%
+  data.frame() %>%
+  mutate(k = 1:21) %>%
+  reshape2::melt("k") %>%
+  mutate(variable = as.numeric(gsub("X", "", variable)))
 
-# predict
-pred_samples <- predict.epinow2(epi_obj)
-pred_samples_df <- mat_to_long(pred_samples, "predictions")
-  
-# evaluate
-test_data <- df %>% 
-  dplyr::filter(state == "NY") %>%
-  arrange(date) %>%
-  slice((30+56):(30+56+21-1)) %>%
-  mutate(key = 1:nrow(.)) %>%
-  rename(value = cases)
-
-ggplot() +
-  stat_lineribbon(data = pred_samples_df, mapping = aes(x = key, y = value)) +
-  geom_line(data = test_data, mapping = aes(x = key, y = value)) +
-  scale_fill_brewer()
+ex_pred %>%
+  ggplot(aes(x = k, y = value, group = variable, color = factor(variable))) +
+  geom_line()
 ```
 
 
@@ -420,17 +414,24 @@ ggplot(mapping = aes(x = x, y = inc)) +
 #### Test functions
 
 ```{r}
-# toy model
-deu_first200 <- subset(df, id == "DEU")$new_confirmed[1:200]
-fit_first200 <- train.arima(deu_first200)
+# data
+data <- df %>%
+  dplyr::filter(state == "NY") %>%
+  arrange(date) %>%
+  slice(10:(10+56-1))
 
-# predict
-deu_pred <- predict.arima(fit_first200)
-deu_first221 <- df %>%
-  dplyr::filter(id == "DEU") %>%
-  slice(1:221) %>%
-  dplyr::select(date, new_confirmed)
-plot.predict(deu_first221$date, deu_first221$new_confirmed, deu_pred)
+plot(data$incidence)
+
+ex_pred <- train_and_predict("arima", data = data, seed = 12345, d = 1000, n = 21) %>%
+  data.frame() %>%
+  mutate(k = 1:21) %>%
+  reshape2::melt("k") %>%
+  mutate(variable = as.numeric(gsub("X", "", variable))) %>%
+  filter(variable <= 10)
+
+ex_pred %>%
+  ggplot(aes(x = k, y = value, group = variable, color = factor(variable))) +
+  geom_line()
 ```
 
 
@@ -475,30 +476,20 @@ plot(m, forecast) + add_changepoints_to_plot(m)
 data <- df %>%
   dplyr::filter(state == "NY") %>%
   arrange(date) %>%
-  slice(30:(30+56-1)) %>%
-  rename(ds = date) %>%
-  mutate(y = log1p(incidence)) %>%
-  dplyr::select(ds, y)
+  slice(30:(30+56-1))
 
-# train
-prophet0.10 <- train.prophet(data, cp_scale = 0.10)
-prophet0.25 <- train.prophet(data, cp_scale = 0.25)
-prophet0.40 <- train.prophet(data, cp_scale = 0.40)
+plot(data$incidence)
 
-# predict
-pred_prophet0.10 <- predict.prophet(prophet0.10)
-pred_prophet0.25 <- predict.prophet(prophet0.25)
-pred_prophet0.40 <- predict.prophet(prophet0.40)
+ex_pred <- train_and_predict("prophet", data = data, seed = 12345, d = 1000, n = 21) %>%
+  data.frame() %>%
+  mutate(k = 1:21) %>%
+  reshape2::melt("k") %>%
+  mutate(variable = as.numeric(gsub("X", "", variable))) %>%
+  filter(variable <= 10)
 
-# plot 
-dat_test <- df %>%
-  dplyr::filter(state == "NY") %>%
-  arrange(date) %>%
-  slice(30:(30+56-1+21)) %>%
-  mutate(y = log1p(incidence))
-plot.predict(dat_test$date, dat_test$y, pred_prophet0.10)
-plot.predict(dat_test$date, dat_test$y, pred_prophet0.25)
-plot.predict(dat_test$date, dat_test$y, pred_prophet0.40)
+ex_pred %>%
+  ggplot(aes(x = k, y = value, group = variable, color = factor(variable))) +
+  geom_line()
 ```
 
 
@@ -725,39 +716,25 @@ ggplot() +
   geom_line(data = rbind(data), mapping = aes(x = x, y = new_confirmed), color = "red")
 ```
 
-#### Toy example
+#### Test functions
 
 ```{r}
-# train data
-n0 <- 1
-n <- 56
+# data
 data <- df %>%
   dplyr::filter(state == "NY") %>%
-  slice(n0:n) %>%
-  mutate(x = n0:n) %>%
-  mutate(log_inc = trans(new_confirmed, population, transfct = function(x) log(x + 1)))
+  arrange(date) %>%
+  slice(30:(30+56-1))
 
-# test data
-test_data <- df %>%
-  dplyr::filter(id == "DEU") %>%
-  slice((n+1):(n+21)) %>%
-  mutate(x = (n+1):(n+21)) %>%
-  mutate(log_inc = trans(new_confirmed, population, transfct = function(x) log(x + 1)))
+plot(data$incidence)
 
-# train model
-gp_fit <- train.gp(data$log_inc, n = 21, d = 1000, chains = 4, parallel_chains = 4, threads_per_chain = 2, seed = 12345)
-
-# predict
-pred <- predict.gp(gp_fit) %>%
+ex_pred <- train_and_predict("gp", data = data, seed = 12345, d = 1000, n = 21) %>%
   data.frame() %>%
-  gather() %>%
-  rename(log_inc = value) %>%
-  mutate(draw = as.numeric(stringi::stri_extract(key, regex = "\\d+"))) %>%
-  mutate(x = n+rep(1:21, each = max(draw))) %>%
-  mutate(new_confirmed = inv_trans(log_inc, data$population[1]))
+  mutate(k = 1:21) %>%
+  reshape2::melt("k") %>%
+  mutate(variable = as.numeric(gsub("X", "", variable))) %>%
+  filter(variable <= 10)
 
-ggplot(mapping = aes(x = x, y = new_confirmed)) +
-  stat_lineribbon(data = pred) +
-  scale_fill_brewer() +
-  geom_line(data = test_data, color = "red")
+ex_pred %>%
+  ggplot(aes(x = k, y = value, group = variable, color = factor(variable))) +
+  geom_line()
 ```

@@ -31,28 +31,33 @@ generation_time <- get_generation_time(disease = "SARS-CoV-2", source = "ganyani
 #' - Rate: mean=2.13 (SD: 0.078)
 #' - approximated via simulation with a log normal distribution using fitdistrplus::fitdist 
 #' 
-set.seed(123)
-n <- 1e3
-s <- 1e2
-#pars_nbinom <- list(mean = rnorm(n, 5.25, 0.085), sd = rnorm(n, 1.57, 0.054))
-pars_gamma <- list(shape = rnorm(n, 1.88, 0.055), rate = rnorm(n, 2.13, 0.078))
-pars_lnorm_rep_del <- list()
-for (i in 1:s) {
-  #d <- rnbinom(n, size = pars_nbinom$sd[i], mu = pars_nbinom$mean[i])
-  #d <- ifelse(d==0, d+1e-6, d)
-  d <- rgamma(n, shape = pars_gamma$shape[i], scale = pars_gamma$rate[i])
-  pars_lnorm_rep_del[[i]] <- fitdist(d, distr = "lnorm")$estimate
-}
-meanlog_rd_mean <- mean(sapply(pars_lnorm_rep_del, function(x) x["meanlog"]))
-meanlog_rd_sd <- sd(sapply(pars_lnorm_rep_del, function(x) x["meanlog"]))
-sdlog_rd_mean <- mean(sapply(pars_lnorm_rep_del, function(x) x["sdlog"]))
-sdlog_rd_sd <- sd(sapply(pars_lnorm_rep_del, function(x) x["sdlog"]))
 
-reporting_delay <- list(
-  mean = meanlog_rd_mean, mean_sd = meanlog_rd_sd,
-  sd = sdlog_rd_mean, sd_sd = sdlog_rd_sd,
-  max = 15
-)
+make_reporting_delay <- function(seed = 12345, n = 1e3, s = 1e2, max_delay = 15,
+                                 shape_mean = 1.88, shape_sd = 0.055,
+                                 rate_mean = 2.16, rate_sd = 0.078) {
+  set.seed(seed)
+  pars_gamma <- list(shape = rnorm(n, shape_mean, shape_sd), 
+                     rate = rnorm(n, rate_mean, rate_sd))
+  pars_lnorm_rep_del <- list()
+  for (i in 1:s) {
+    d <- rgamma(n, shape = pars_gamma$shape[i], scale = pars_gamma$rate[i])
+    pars_lnorm_rep_del[[i]] <- fitdist(d, distr = "lnorm")$estimate
+  }
+  meanlog_rd_mean <- mean(sapply(pars_lnorm_rep_del, function(x) x["meanlog"]))
+  meanlog_rd_sd <- sd(sapply(pars_lnorm_rep_del, function(x) x["meanlog"]))
+  sdlog_rd_mean <- mean(sapply(pars_lnorm_rep_del, function(x) x["sdlog"]))
+  sdlog_rd_sd <- sd(sapply(pars_lnorm_rep_del, function(x) x["sdlog"]))
+  
+  reporting_delay <- list(
+    mean = meanlog_rd_mean, mean_sd = meanlog_rd_sd,
+    sd = sdlog_rd_mean, sd_sd = sdlog_rd_sd,
+    max = max_delay
+  )
+  
+  return(reporting_delay)
+}
+
+reporting_delay <- make_reporting_delay()
 
 
 # discretize delay distribution
@@ -109,3 +114,4 @@ plot_delay_distr <- function(delay, distr = "lognormal", S = 100) {
     scale_fill_brewer() +
     scale_x_continuous(limits = c(0, delay$max))
 }
+

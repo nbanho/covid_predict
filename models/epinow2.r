@@ -3,6 +3,7 @@ library(EpiNow2)
 
 # utilities
 source("utils/delays.r")
+source("utils/prior_R.R")
 
 #' @title train and predict using EpiNow2
 #' 
@@ -26,8 +27,6 @@ train_and_predict.epinow2 <- function(...) {
   #return(data)
   
   # fit model
-  rt_prior_mean <- exp(0.079+0.5*0.18^2)
-  rt_prior_sd <- rt_prior_mean * (exp(0.18^2) - 1)
   estimates <- epinow(reported_cases = data,
                       generation_time = generation_time,
                       delays = delay_opts(incubation_period, reporting_delay),
