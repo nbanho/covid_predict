@@ -260,12 +260,11 @@ save_plot(mean10_pl, "results/ts_mean10.png", w = 21, h = 21)
 
 ```{r}
 # read forecasts and compute score
-df_pCalib <- compute_forecast_score(files, type = "calibration")
+df_pCalib <- compute_forecast_score(files, type = "calibration", sum_by = c(0,7,14,21))
 
 # plot score
 pCalib_pl <- df_pCalib %>%
-  mutate(variable = factor(variable, levels = model_names)) %>% 
-  mutate(n = cut(n, breaks = n_brks, labels = n_lbs)) %>%
+  mutate(n = paste0("Week: ", n)) %>%
   ggplot(aes(x = value, color = variable, fill = variable)) +
   facet_wrap(~ n, ncol = 3) +
   geom_density(alpha = 0.1) + # geom_histogram(aes(y = stat(count) / sum(count)))
@@ -279,81 +278,18 @@ pCalib_pl <- df_pCalib %>%
   theme(legend.title = element_blank())
 
 pCalib_pl
-
-pCalib_pl_wtitle <- pCalib_pl +
-  labs(title = "Probabilistic Calibration",
-       subtitle = "PIT histogram by model and n-week forecast")
-
-# save plot
-save_plot(pCalib_pl_wtitle, "results/calibration_probabilistic.png", w = 16, h = 8)
-```
-
-
-### Marginal calibration
-
-```{r}
-# compute CDF of observations
-Gx <- df_pCalib %>%
-  group_by(state, state_id, date) %>% 
-  slice(1) %>%
-  ungroup() %>%
-  group_by(state, state_id) %>%
-  mutate(Gx = ecdf(target)(target)) %>%
-  ungroup() %>%
-  mutate(inc_breaks = as.numeric(as.character(cut(target, breaks = inc_small_brks, labels = inc_small_brks[-1])))) %>%
-  dplyr::select(state_id, date, Gx, inc_breaks)
-
-# compute difference to CDF of forecasts
-df_mCalib <- df_pCalib %>%
-  rename(Fx = value) %>%
-  left_join(Gx) %>%
-  mutate(dFxGx = Fx - Gx) %>%
-  mutate(n = cut(n, breaks = n_brks, labels = n_lbs)) %>%
-  group_by(n, inc_breaks, variable) %>%
-  summarize(value = mean(dFxGx)) %>%
-  ungroup() 
-
-# plot marginal calibration
-inc_small_brks_pl <- inc_small_brks
-inc_small_brks_pl[1] <- 0
-inc_small_brks_pl[length(inc_small_brks_pl)] <- 170
-mCalib_pl <- df_mCalib %>%
-  mutate(variable = recode(variable, !!! model_names)) %>%
-  mutate(variable = factor(variable, levels = model_names)) %>% 
-  mutate(incidence = ifelse(is.infinite(inc_breaks), 170, inc_breaks)) %>%
-  ggplot(aes(x = inc_breaks, y = value, color = variable)) +
-  geom_line() +
-  geom_point(shape = 1) +
-  facet_wrap(~ n, ncol = 3) +
-  geom_hline(aes(yintercept = 0), linetype = "dotted") +
-  scale_x_continuous(breaks = inc_small_brks_pl, limits = c(0, 180), expand = c(0,0)) +
-  scale_y_continuous(limits = c(-.7, .7), breaks = seq(-0.6,0.6,.3)) +
-  scale_color_manual(values = mcols) +
-  labs(x = "Incidence (new cases per 100,000 people)", 
-       y = expression(bar(CDF)[Forecast]-CDF[Observed])) +
-  theme_bw2() +
-  theme(legend.title = element_blank()) 
-
-mCalib_pl
-
-mCalib_pl_wtitle <- mCalib_pl +
-  labs(title = "Marginal Calibration",
-       subtitle = "Difference between average predictive and empirical CDF by method and n-week forecast")
-
-# save plot
-save_plot(mCalib_pl_wtitle, "results/calibration_marginal.png", w = 16, h = 8)
 ```
 
 
 ### Empirical coverage
 
 ```{r}
-df_cov90 <- compute_forecast_score(files, type = "coverage", q = 0.05) %>%
+df_cov90 <- compute_forecast_score(files, type = "coverage", sum_by = c(0,7,14,21), q = 0.05) %>%
   group_by(n, variable) %>%
   summarize(value = sum(value) / n()) %>%
   ungroup()
 
-df_cov50 <- compute_forecast_score(files, type = "coverage", q = 0.25) %>%
+df_cov50 <- compute_forecast_score(files, type = "coverage", sum_by = c(0,7,14,21), q = 0.25) %>%
   group_by(n, variable) %>%
   summarize(value = sum(value) / n()) %>%
   ungroup()
@@ -363,12 +299,10 @@ cov90_pl <- df_cov90 %>%
   geom_line() +
   geom_point(shape = 1) +
   geom_hline(aes(yintercept = .9), linetype = "dashed") +
-  scale_x_continuous(minor_breaks = seq(0,21,1), expand = c(0,0), breaks = c(1,7,14,21), limits = c(0.5,21.5)) +
+  scale_x_continuous(breaks = seq(1,3,1)) +
   scale_y_continuous(expand = c(0,0), limits = c(0, 1), labels = function(x) x * 100) +
   scale_color_manual(values = mcols) +
-  labs(x = "Number of days forecasted ahead", 
-       y = "Coverage (%) of the 90%-CrI") +
-       #y = paste0("Median size of ", qq_name, "%-CrI (incidence)")) +
+  labs(y = "Coverage of 90%-PI (%)") +
   theme_bw2() +
   theme(legend.title = element_blank())
 
@@ -379,14 +313,12 @@ cov50_pl <- df_cov50 %>%
   geom_line() +
   geom_point(shape = 1) +
   geom_hline(aes(yintercept = .5), linetype = "dashed") +
-  scale_x_continuous(minor_breaks = seq(0,21,1), expand = c(0,0), breaks = c(1,7,14,21), limits = c(0.5,21.5)) +
+  scale_x_continuous(breaks = seq(1,3,1)) +
   scale_y_continuous(expand = c(0,0), limits = c(0, 1), labels = function(x) x * 100) +
   scale_color_manual(values = mcols) +
-  labs(x = "Number of days forecasted ahead", 
-       y = "Coverage (%) of the 50%-CrI") +
-       #y = paste0("Median size of ", qq_name, "%-CrI (incidence)")) +
+  labs(y = "Coverage of 50%-PI (%)") +
   theme_bw2() +
-  theme(legend.title = element_blank())
+  theme(legend.title = element_blank(), axis.title.x = element_blank())
 
 cov50_pl
 ```
@@ -396,40 +328,27 @@ cov50_pl
 
 ```{r}
 # compute sharpness score
-#qq <- 0.05
-#qq_name <- "90"
-df_sharp <- compute_forecast_score(files, type = "sharpness") # , q = qq
+df_sharp <- compute_forecast_score(files, type = "sharpness", sum_by = c(0,7,14,21)) 
 
 # summarize sharpness
-df_sharp_median <- df_sharp %>%
+df_sharp_sum <- df_sharp %>%
   group_by(n, variable) %>%
-  summarize(value = median(value, na.rm = T)) %>%
+  summarize(value = mean(value, na.rm = T)) %>%
   ungroup()
 
 # plot sharpness
-sharp_pl <- df_sharp_median %>%
+sharp_pl <- df_sharp_sum %>%
   ggplot(aes(x = n, y = value, color = variable)) +
   geom_line() +
   geom_point(shape = 1) +
-  scale_x_continuous(minor_breaks = seq(0,21,1), expand = c(0,0), breaks = c(1,7,14,21), limits = c(0.5,21.5)) +
-  scale_y_continuous(expand = c(0,0), limits = c(0, NA)) +
+  scale_x_continuous(breaks = seq(1,3,1)) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05))) +
   scale_color_manual(values = mcols) +
-  labs(x = "Number of days forecasted ahead", 
-       y = "Dispersion") +
-       #y = paste0("Median size of ", qq_name, "%-CrI (incidence)")) +
+  labs(y = "Dispersion") +
   theme_bw2() +
-  theme(legend.title = element_blank())
+  theme(legend.title = element_blank(), axis.title.x = element_blank())
 
 sharp_pl
-
-sharp_pl_wtitle <- sharp_pl +
-  labs(title = "Sharpness",
-       subtitle = "Median of the normalised median absolute deviation about the median")
-       #subtitle = paste0("Median size of ", qq_name, "%-CrI by method and n-day forecast"))
-
-# save plot
-save_plot(sharp_pl_wtitle, "results/sharpness.png", w = 8, h = 8)
-#save_plot(sharp_pl_wtitle, paste0("results/sharpness_q", qq_name, ".png"), w = 8, h = 8)
 ```
 
 
@@ -437,7 +356,7 @@ save_plot(sharp_pl_wtitle, "results/sharpness.png", w = 8, h = 8)
 
 ```{r}
 # compute bias
-df_bias <- compute_forecast_score(files, type = "bias")
+df_bias <- compute_forecast_score(files, type = "bias", sum_by = c(0,7,14,21))
 
 # summarize score
 df_bias_mean <- df_bias %>%
@@ -451,21 +370,14 @@ bias_pl <- df_bias_mean %>%
   geom_line() +
   geom_point(shape = 1) +
   geom_hline(aes(yintercept = 0.5), linetype = "dotted") +
-  scale_x_continuous(minor_breaks = seq(0,21,1), expand = c(0,0), breaks = c(1,7,14,21), limits = c(0.5,21.5)) +
+  scale_x_continuous(breaks = seq(1,3,1)) +
   scale_y_continuous(expand = c(0,0), limits = c(0, 1), breaks = seq(0, 1, .25), labels = function(x) x * 100) +
   scale_color_manual(values = mcols) +
-  labs(x = "Number of days forecasted ahead", 
-       y = "Overestimation (%)") +
+  labs(y = "Overestimation (%)") +
   theme_bw2() +
-  theme(legend.title = element_blank())
+  theme(legend.title = element_blank(), axis.title.x = element_blank())
 
 bias_pl
-
-bias_pl_wtitle <- bias_pl +
-  labs(title = "Bias",
-       subtitle = "Overestimation by method and n-day forecast")
-
-save_plot(bias_pl_wtitle, "results/bias.png", w = 8, h = 8)  
 ```
 
 ### Summary plot
@@ -494,7 +406,44 @@ save_plot(csb_summary_pl, "results/descriptives.pdf", w = 16, h = 18)
 ```{r}
 # compute CRPS
 df_crps <- compute_forecast_score(files, sum_by = c(0,7,14,21), type = "crps")
-df_crps$n <- paste("Week", df_crps$n)
+
+crps_pl <- df_crps %>%
+  ggplot(aes(x = value, y = variable, group = variable, fill = variable)) +
+  #stat_slab(alpha = 0.3, scale = 0.8, normalize = "panels") +
+  stat_dots(aes(color = variable), quantiles = 20) +
+  stat_pointinterval(point_interval = mean_qi, size = 1 / cm(1), shape = 16, fill = "black", .width = NA) + 
+  stat_pointinterval(point_interval = median_qi, size = 1 / cm(1), shape = 15, fill = "black", .width = NA) + 
+  labs(x = "CRPS") +
+  scale_color_manual(values = mcols) +
+  scale_fill_manual(values = mcols) +
+  facet_wrap(~ n) +
+  theme_bw2() +
+  theme(axis.title.y = element_blank(), legend.title = element_blank())
+  
+crps_pl
+
+save_plot(crps_pl, "results/crps-distribution.pdf", w = 16, h = 8)
+
+
+# Summary
+
+df_crps_sum <- df_crps %>%
+  group_by(n, variable) %>%
+  summarize(Median = median(value),
+            Mean = mean(value)) %>%
+  ungroup() 
+
+crps_sum_pl <- df_crps_sum %>%
+  ggplot(aes(x = n, y = Mean, color = variable)) +
+  geom_line() +
+  geom_point(shape = 1) +
+  geom_hline(aes(yintercept = 0.5), linetype = "dotted") +
+  scale_x_continuous(breaks = seq(1,3,1)) +
+  scale_y_continuous(expand = c(0,0)) +
+  scale_color_manual(values = mcols) +
+  labs(y = "CRPS") +
+  theme_bw2() +
+  theme(legend.title = element_blank(), axis.title.x = element_blank())
 
 # handle outliers
 x_outl <- 1e3
@@ -506,12 +455,11 @@ df_crps$value2 <- ifelse(df_crps$value > x_outl, x_outl, df_crps$value)
 #   mutate(q = as.integer(cut(value2, quantile(value2, c(0, 0.25, 0.5, 0.75, 1))))) %>%
 #   ungroup()
 
-# summaries
-df_crps_sum <- df_crps %>%
-  group_by(n, variable) %>%
-  summarize(Median = median(value),
-            Mean = mean(value)) %>%
-  ungroup() 
+df_crps_sum %>%
+  ggplot(aes(y = variable, x = Mean, fill = variable)) +
+  geom_bar(stat = "identity") +
+  facet_wrap(~ n) +
+  scale_fill_manual(values = mcols)
 
 # plot
 crps_hist_pl <- ggplot() +

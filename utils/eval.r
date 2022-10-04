@@ -44,62 +44,74 @@ read_n_ahead_forecasts <- function(files, n) {
     mutate(state = recode(state_id, !!! state_names)) 
 }
 
-compute_forecast_score <- function(files, sum_by = NULL, ...) { 
-  do.call(rbind, map(files, function(f) {
-    print(sprintf("Compute score for file %s", f))
-    # read model name
-    m <- read_model(f)
+compute_forecast_score <- function(df, m, s, sum_by = c(1,7,14,21), ...) {
+  # compute incidence
+  if (grepl("epi", m)) {
+    df$data <- lapply(df$data, function(D) { 
+      D$forecast <- lapply(D$forecast, compute_incidence, state_id = tolower(s))
+      return(D)
+    })
+  }
   
+  # compute log incidence
+  df$data <- lapply(df$data, function(D) {
+    D$forecast <- lapply(D$forecast, function(fcast) log1p(fcast + 1e-6)) # if incidence is exactly -1
+    D$incidence <- log1p(D$incidence + 1e-6)
+    return(D)
+  })
+  
+  # add n_ahead
+  df <- add_n_ahead(df)
+  
+  if (is.null(sum_by)) {
+    df$data <- lapply(df$data, function(D) {
+      D$value <- pred_score(D$forecast, D$incidence, ...)
+      return(D %>% dplyr::select(-forecast))
+    })
+  } else {
+    df <- df %>%
+      dplyr::select(-state,-forecast_date) %>%
+      unnest(cols = c("data")) %>%
+      mutate(n = as.integer(cut(n, sum_by))) %>%
+      group_by(date, n) %>%
+      summarize(incidence = sum(incidence),
+                forecast = list(colSums(do.call(rbind, forecast)))) %>%
+      ungroup()
+    df$value <- pred_score(df$forecast, df$incidence, ...)
+    df <- dplyr::select(df, -forecast)
+  }
+  
+  # unnest and add info
+  if(is.null(sum_by)) {
+    df <- df %>%
+      unnest(cols = c("data")) 
+  }
+  df <- df %>%
+    mutate(state_id = tolower(s),
+           variable = m) %>%
+    mutate(variable = recode(variable, !!! model_names)) %>%
+    mutate(variable = factor(variable, model_names)) %>%
+    rename(target = incidence) %>%
+    mutate(state = recode(state_id, !!! state_names)) 
+  
+  return(df)
+}
+
+compute_forecast_score.files <- function(files, sum_by = NULL, ...) { 
+  do.call(rbind, map(files, function(f) {
+    
+    print(sprintf("Compute score for file %s", f))
+    
+    m <- read_model(f)
+    
     # read state id
     s <- read_state_id(f)
-  
+    
     # read file 
     df <- readRDS(f) 
-  
-    # compute incidence
-    if (grepl("epi", m)) {
-      df$data <- lapply(df$data, function(D) { 
-        D$forecast <- lapply(D$forecast, compute_incidence, state_id = tolower(s))
-        return(D)
-      })
-    }
     
-    # add n_ahead
-    df <- add_n_ahead(df)
-  
     # compute score
-    if (is.null(sum_by)) {
-      df$data <- lapply(df$data, function(D) {
-        D$value <- pred_score(D$forecast, D$incidence, ...)
-        return(D %>% dplyr::select(-forecast))
-      })
-    } else {
-      df <- df %>%
-        dplyr::select(-state,-forecast_date) %>%
-        unnest(cols = c("data")) %>%
-        mutate(n = as.integer(cut(n, sum_by))) %>%
-        group_by(date, n) %>%
-        summarize(incidence = sum(incidence),
-                  forecast = list(colSums(do.call(rbind, forecast)))) %>%
-        ungroup()
-      df$value <- pred_score(df$forecast, df$incidence, ...)
-      df <- dplyr::select(df, -forecast)
-    }
-  
-    # unnest and add info
-    if(is.null(sum_by)) {
-      df <- df %>%
-        unnest(cols = c("data")) 
-    }
-   df <- df %>%
-      mutate(state_id = tolower(s),
-             variable = m) %>%
-      mutate(variable = recode(variable, !!! model_names)) %>%
-      mutate(variable = factor(variable, model_names)) %>%
-      rename(target = incidence) %>%
-      mutate(state = recode(state_id, !!! state_names)) 
-  
-    return(df)
+    compute_forecast_score(df, m, s, sum_by, ...)
   }))
 }
 
