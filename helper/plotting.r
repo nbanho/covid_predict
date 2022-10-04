@@ -1,4 +1,5 @@
 require(GGally)
+require(ggridges)
 
 # ggplot theme for Nature style
 text_size = 8
