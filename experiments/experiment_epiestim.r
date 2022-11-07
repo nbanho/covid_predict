@@ -10,7 +10,7 @@ run_prediction_us <- function() {
   
   # models
   source("models/epiestim.r")
-  tau_window <- c(1,3,5,7,14,21)
+  tau_window <- c(1,7,14)
   
   # states
   if (grepl("all", states)) {
@@ -29,15 +29,15 @@ run_prediction_us <- function() {
     for (k in 1:K) {
       
       # train and forecast for each model
-      if (all(train_df_state$data[[k]]$incidence==0)) {
+      if (all(train_df_state$data[[k]]$incidence<=min_inc)) {
         # insert 0 predictions
         predicted_cori <- matrix(0, nrow = n_preds, ncol = n_draws)
         for (tau in tau_window) {
-          test_df_state$data[[k]][[paste0("epiestim",tau)]] <- get_samples(predicted_cori, test_df_state$data[[k]], k)
+          test_df_state$data[[k]][[paste0("epiestim-",tau)]] <- get_samples(predicted_cori, test_df_state$data[[k]], k)
         }
       } else {
         for (tau in tau_window) {
-          test_df_state$data[[k]][[paste0("epiestim",tau)]] <- get_samples(
+          test_df_state$data[[k]][[paste0("epiestim-",tau)]] <- get_samples(
             train_and_predict.epiestim(tau = tau, data = train_df_state$data[[k]], 
                                        seed = seed12345, n = n_preds, d = n_draws),
             test_df_state$data[[k]], k

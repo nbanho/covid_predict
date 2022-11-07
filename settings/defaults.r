@@ -1,8 +1,11 @@
+# min incidence for estimation
+min_inc <- 1
+
 # seed
 seed12345 = 12345 # currently not used
 
 # number of days to predict into the future
-n_preds <- 21
+n_preds <- 14
 
 # number of days before start of prediction
 n_train <- n_preds
@@ -22,16 +25,16 @@ train_and_predict <- function(model, ...) {
     train_and_predict.epiestim(tau = 7, ...)
   }
   else if (model == "epinow2") {
-    train_and_predict.epinow2(...)
+    train_and_predict.epinow2(est_rt = "gp", ...)
   }
   else if (model == "arima") {
-    train_and_predict.arima(...)
+    train_and_predict.arima(pdq_order = c(1,0,1), ...)
   }
   else if (model == "prophet") {
     train_and_predict.prophet(cp_scale = 0.25, ...)
   }
   else if (model == "gp") {
-    train_and_predict.gp(...)
+    train_and_predict.gp(rho_short = 7, ...)
   }
 }
 

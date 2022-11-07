@@ -65,13 +65,14 @@ data {
   real x1[N1];
   vector[N1] y1;
   real x2[N2];
+  real<lower=0> rho_short;
 }
 
 transformed data {
   real delta = 1e-9;
   vector[N1] mu = rep_vector(0, N1);
   real rho0 = N1;
-  real rho1 = 7;
+  real rho1 = rho_short;
   real period = 7;
   real rho2p = 1;
   real rho2e = N1;

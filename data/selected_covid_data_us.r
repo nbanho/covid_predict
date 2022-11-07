@@ -4,6 +4,7 @@ library(tidyverse)
 library(highcharter)
 library(lubridate)
 source("helper/plotting.r")
+source("settings/defaults.r")
 
 # selected US states
 # time series data for all states
@@ -42,7 +43,7 @@ end_date <- as.Date("2021-03-15")
 df_sel_us <- aggregate_signals(
   covidcast_signals(data_source = rep("jhu-csse", 2),
                     signal = c("confirmed_incidence_num", "confirmed_incidence_prop"),
-                    geo_type = "state", start_day = start_date %m-% days(56+20), end_day = end_date,
+                    geo_type = "state", start_day = start_date %m-% days(56+n_preds-1), end_day = end_date,
                     geo_values = selected_states),
   format = "wide") %>% # Data not fetched for the following days: 2020-01-15, 2020-01-16, 2020-01-17, 2020-01-18, 2020-01-19, 2020-01-20, 2020-01-21 
   data.frame() %>%
@@ -65,7 +66,7 @@ df_sel_us <- df_sel_us %>%
 saveRDS(df_sel_us, "data/us-selected-states_ts-date.rds")
 
 # generate training and prediction data
-date_seq <- seq.Date(start_date %m-% days(20), end_date, by = "day")
+date_seq <- seq.Date(start_date %m-% days(n_preds-1), end_date, by = "day")
 for (st in toupper(selected_states)) {
   df_st <- dplyr::filter(df_sel_us, state == st)
   list_st_train <- list()
@@ -78,7 +79,7 @@ for (st in toupper(selected_states)) {
     list_st_test[[d]] <- df_st %>% 
       dplyr::select(date, cases, incidence) %>%
       dplyr::filter(date >= date_seq[d]) %>% 
-      dplyr::filter(date < date_seq[d] %m+% days(21)) %>%
+      dplyr::filter(date < date_seq[d] %m+% days(n_preds)) %>%
       tail(d)
   }
   df_st_train <- tibble(state = st, forecast_date = date_seq, data = list_st_train)

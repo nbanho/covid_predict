@@ -195,13 +195,42 @@ data <- df %>%
   arrange(date) %>%
   slice(30:(30+56-1))
 
+data <- df %>%
+  dplyr::filter(state == "AZ") %>%
+  arrange(date) %>%
+  slice(1:56)
+
 # estimate R
 estimates <- epinow(reported_cases = data %>% dplyr::select(date, cases) %>% rename(confirm = cases),
                     generation_time = generation_time,
+                    backcalc = backcalc_opts(prior_window = 7),
                     delays = delay_opts(incubation_period, reporting_delay),
-                    rt = rt_opts(prior = list(mean = exp(0.079+0.5*0.18^2), sd = exp(0.079+0.5*0.18^2)*(exp(0.18^2) - 1)), 
+                    rt = rt_opts(prior = list(mean = exp(0.079+0.5*0.18^2), 
+                                              sd = exp(0.079+0.5*0.18^2)*(exp(0.18^2) - 1)), 
                                  use_breakpoints = F, pop = 19453561),
                     gp = gp_opts(basis_prop = .2, ls_min = 3, alpha_sd = .1),
+                    stan = stan_opts(cores = 4),
+                    horizon = 21,
+                    output = "samples")
+
+estimates_rw <- epinow(reported_cases = data %>% dplyr::select(date, cases) %>% rename(confirm = cases),
+                    generation_time = generation_time,
+                    delays = delay_opts(incubation_period, reporting_delay),
+                    rt = rt_opts(prior = list(mean = exp(0.079+0.5*0.18^2), 
+                                              sd = exp(0.079+0.5*0.18^2)*(exp(0.18^2) - 1)), 
+                                 use_breakpoints = F, pop = 19453561, 
+                                 rw = 7),
+                    gp = NULL,
+                    stan = stan_opts(cores = 4),
+                    horizon = 21,
+                    output = "samples")
+
+estimates_bc <- epinow(reported_cases = data %>% dplyr::select(date, cases) %>% rename(confirm = cases),
+                    generation_time = generation_time,
+                    delays = delay_opts(incubation_period, reporting_delay),
+                    rt = NULL,
+                    gp = NULL,
+                    backcalc = backcalc_opts(prior_window = 7),
                     stan = stan_opts(cores = 4),
                     horizon = 21,
                     output = "samples")

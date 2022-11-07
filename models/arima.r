@@ -11,7 +11,7 @@ library(rstan)
 #'            
 #' @return A d x n matrix fcast of the posterior draws for the incidence
 
-train_and_predict.arima <- function(...) {
+train_and_predict.arima <- function(pdq_order, ...) {
   
   # arguments 
   args <- c(as.list(environment()), list(...))
@@ -23,7 +23,7 @@ train_and_predict.arima <- function(...) {
   set.seed(args$seed)
   
   # fit sarima model
-  fit <- stan_sarima(ts = ts(y, frequency = 7), order = c(1,0,1), seasonal = c(0,1,0), iter = args$d / 2)
+  fit <- stan_sarima(ts = ts(y, frequency = 7), order = pdq_order, seasonal = c(0,1,0), iter = args$d / 2)
   
   # forecast
   pred <- t(as.matrix(posterior_predict(fit, h = args$n, draws = args$d)))

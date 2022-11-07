@@ -10,7 +10,7 @@ run_prediction_us <- function() {
   
   # models
   source("models/prophet.r")
-  cp_scale <- seq(0.05, 0.45, 0.05)
+  cp_scale <- seq(0.05, 0.45, 0.1)
   
   # states
   if (grepl("all", states)) {
@@ -29,15 +29,15 @@ run_prediction_us <- function() {
     for (k in 1:K) {
       
       # train and forecast for each model
-      if (all(train_df_state$data[[k]]$incidence==0)) {
+      if (all(train_df_state$data[[k]]$incidence<=min_inc)) {
         # insert 0 predictions
         predicted_prophet <- matrix(0, nrow = n_preds, ncol = n_draws)
         for (tau in cp_scale) {
-          test_df_state$data[[k]][[paste0("prophet",tau)]] <- get_samples(predicted_prophet, test_df_state$data[[k]], k)
+          test_df_state$data[[k]][[paste0("prophet-",tau)]] <- get_samples(predicted_prophet, test_df_state$data[[k]], k)
         }
       } else {
         for (tau in cp_scale) {
-          test_df_state$data[[k]][[paste0("prophet",tau)]] <- get_samples(
+          test_df_state$data[[k]][[paste0("prophet-",tau)]] <- get_samples(
             train_and_predict.prophet(cp_scale = tau, data = train_df_state$data[[k]], 
                                       seed = seed12345, n = n_preds, d = n_draws),
             test_df_state$data[[k]], k
