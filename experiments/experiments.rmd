@@ -14,138 +14,143 @@ knitr::opts_chunk$set(echo = TRUE)
 ```{r}
 # libraries
 library(tidyverse)
+# Suppress summarise info
+options(dplyr.summarise.inform = FALSE)
 library(reshape2)
 library(lubridate)
 
 # utils
-source("utils/eval.r")
-source("helper/plotting.r")
+source("../utils/eval.r")
+source("../helper/plotting.r")
 
-# models
-models <- c("epiestim", "epinow2", "epidemia", "arima", "prophet", "gp")
-model_names <- c("EpiEstim", "EpiNow2", "Epidemia", "ARIMA", "Prophet", "GP")
-names(model_names) <- models
-
-# states
-states <- c("az","ca","il","md","nj","ny")
-state_names <- c("Arizona", "California", "Illinois", 
-                 "Maryland", "New Jersey", "New York")
-names(state_names) <- states
-```
-
-## EpiEstim
-
-### Data
-
-```{r}
-files_epiestim <- list.files("predictions/experiment_epiestim/", full.names = T)
-tau = c(1,3,5,7,14,21)
-```
-
-### Results
-
-```{r}
 # compute scores
-scores_epiestim <- tibble()
-for (f in 1:length(files_epiestim)) {
-  df <- readRDS(files_epiestim[f])
-  s <- gsub(".rds", "", basename(files_epiestim[f]))
-  m <- "epiestim"
-  for (t in tau) {
-    df_t <- df %>% mutate(data = map(data, function(D) 
-      D %>% 
-        select(all_of(c("date", "cases", "incidence", paste0("epiestim", t)))) %>%
-        set_names(c("date", "cases", "incidence", "forecast"))))
-    crps <- compute_forecast_score(df = df_t, m = m, s = s, sum_by = c(1,7,14,21)) %>%
-      mutate(tau = t)
-    scores_epiestim <- rbind(scores_epiestim, crps)
+score_experiment <- function(files, parameter, model) {
+  scores_df <- tibble()
+  for (f in 1:length(files)) {
+    print(f)
+    df <- readRDS(files[f])
+    for (p in parameter) {
+      print(p)
+      df_p <- df %>% mutate(data = map(data, function(D) 
+        D %>% 
+          select(all_of(c("date", "cases", "incidence", paste0(model, "-", p)))) %>%
+          set_names(c("date", "cases", "incidence", "forecast"))))
+      crps <- compute_forecast_score(df = df_p, model = model) %>%
+        mutate(variable = p)
+      scores_df <- rbind(scores_df, crps)
+    }
   }
+  return(scores_df)
 }
 
 # summarize scores
-scores_epiestim_sum <- scores_epiestim %>%
-  group_by(n, tau) %>%
-  summarize(value = mean(value)) %>%
-  ungroup()
+summarize_scores <- function(scores_df) {
+  scores_df <- scores_df %>%
+    group_by(model, variable, n) %>%
+    summarize(score = mean(score)) %>%
+    ungroup()
+  return(scores_df)
+}
 
-# plot 
-epiestim_pl <- scores_epiestim_sum %>%
-  ggplot(aes(x = n, y = value, color = factor(tau))) +
-  geom_line() +
-  geom_point(shape = 1) +
-  scale_x_continuous(breaks = seq(1,3)) +
-  scale_color_brewer() +
-  labs(y = "Average CRPS", color = expression("EpiEstim with "*tau*":")) +
-  theme_bw2() +
-  theme(axis.title.x = element_blank()) +
-  guides(color = guide_legend(nrow = 2))
-
-epiestim_pl
-
-save_plot(epiestim_pl, "results/experiments_epiestim.pdf", w = 8, h = 6)
+# plot function
+plot_experiment <- function(score_df, col_blues, expr, title) {
+  n_cols <- length(unique(score_df$variable))
+  cols <- brewer.pal(9, "Blues")[col_blues]
+    
+  score_df %>%
+    ggplot(aes(x = n, y = score, color = factor(variable))) +
+    geom_line() +
+    geom_point(shape = 1) +
+    scale_x_continuous(breaks = seq(1,2), labels = function(x) paste("Week", x)) +
+    scale_y_continuous(limits = c(0,1)) +
+    scale_color_manual(values = cols) +
+    labs(y = "Average CRPS", color = expr, title = title) +
+    theme_bw2() +
+    theme(axis.title.x = element_blank(), legend.position = "top") 
+}
 ```
 
+## Mechanistic models
 
-## Prophet
-
-### Data
-
-```{r}
-files_proph <- list.files("predictions/experiment_prophet/", full.names = T)
-models_proph = c("proph0.10", "proph0.25", "proph0.40")
-```
-
-### Results
+### EpiEstim
 
 ```{r}
+# data
+files_epiestim <- list.files("epiestim/", full.names = T)
+tau = c(1,7,14)
+
 # compute scores
-scores_proph <- do.call(rbind, map(files_proph, function(f) {
-  print(sprintf("Processing file %s", f))
-  read_files(f) %>% add_pred_score(f, models = models_proph, 
-                                   type = "crps", trans = function(x) {x[x>max_inc] <- max_inc; return(x)})
-}))
+scores_epiestim <- score_experiment(files_epiestim, tau, "epiestim")
 
 # summarize scores
-scores_proph_sum <- scores_proph %>%
-  dplyr::select(n, models_proph) %>%
-  melt("n") %>%
-  group_by(n, variable) %>%
-  summarize(value = mean(value)) %>%
-  ungroup()
+scores_epiestim_sum <- summarize_scores(scores_epiestim)
 
 # plot 
-prophet_pl <- scores_proph_sum %>%
-  ggplot(aes(x = n, y = value, color = variable)) +
-  geom_line() +
-  geom_point(shape = 1) +
-  scale_x_continuous(minor_breaks = seq(0,21,1), expand = c(0,0), breaks = c(1,7,14,21), limits = c(0.5,21.5)) +
-  scale_y_continuous(expand = c(0,0), limits = c(0,35)) +
-  scale_color_manual(values = brewer.pal(9,"Purples")[rev(c(3,6,9))],
-                     labels = expression("Prophet("*tau*" = "*0.10*")","Prophet("*tau*" = "*0.25*")","Prophet("*tau*" = "*0.40*")")) +
-  labs(x = "Number of days forecasted ahead", 
-       y = "Average CRPS") +
-  theme_bw2() +
-  theme(legend.title = element_blank())
+epiestim_pl <- plot_experiment(scores_epiestim_sum, c(4,6,8), expression("EpiEstim with "*tau*":"), "a")
+epiestim_pl
+```
 
-# zoom in on Prophet(0.10) and Prophet(0.25)
-prophet_pl_zoom <- scores_proph_sum %>%
-  dplyr::filter(variable != "proph0.10") %>%
-  spread(variable, value) %>%
-  mutate(dp = proph0.25 - proph0.40) %>%
-  ggplot(aes(x = n, y = dp)) +
-  geom_hline(aes(yintercept = 0), linetype = "dashed") +
-  geom_line() +
-  geom_point() +
-  scale_x_continuous(minor_breaks = seq(0,21,1), expand = c(0,0), breaks = c(1,7,14,21), limits = c(0.5,21.5)) +
-  #scale_y_continuous(expand = c(0.005,0.005)) +
-  labs(x = "Number of days forecasted ahead", 
-       y = "Difference in average CRPS\nbetween Prophet(0.25) and Prophet(0.10)") +
-  theme_bw2() +
-  theme(legend.title = element_blank())
+## Stat TS models
 
-# combine into one plot
-proph_pl <- grid.arrange(prophet_pl + labs(title = "a"), prophet_pl_zoom + labs(title = "b"),
-                         ncol = 1, widths = 12, heights = c(8,8))
+### ARIMA
 
-save_plot(proph_pl, "results/experiments_proph.pdf", w = 12, h = 16)
+```{r}
+# data
+files_arima <- list.files("arima/", full.names = T)
+pdq_orders <- matrix(c(1,0,1,
+                       1,1,1,
+                       2,0,2,
+                       2,1,2,
+                       2,2,2),
+                     ncol = 3, byrow = T)
+pdq_name <- apply(pdq_orders, 1, paste, collapse = "")
+
+# compute scores
+scores_arima <- score_experiment(files_arima, pdq_name, "arima")
+
+# summarize scores
+scores_arima_sum <- summarize_scores(scores_arima) %>%
+  mutate(variable = map_chr(variable, function(x) paste0("(", paste0(unlist(strsplit(x, "*")), collapse = ","),  ")")))
+
+# plot 
+arima_pl <- plot_experiment(scores_arima_sum, c(4,5,6,7,9), expression("SARIMA(p,d,q)(0,1,0)"[7]*":"), "d")
+arima_pl
+```
+
+
+### Prophet
+
+```{r}
+# data
+files_prophet <- list.files("prophet/", full.names = T)
+cp_scale <- seq(0.05, 0.45, 0.1)
+
+# compute scores
+scores_prophet <- score_experiment(files_prophet, cp_scale, "prophet")
+
+# summarize scores
+scores_prophet_sum <- summarize_scores(scores_prophet)
+
+# plot 
+prophet_pl <- plot_experiment(scores_prophet_sum, c(2,4,6,8,9), expression("Prophet with "*tau*":"), "d")
+prophet_pl
+```
+
+
+### GP
+
+```{r}
+# data
+files_gp <- list.files("gp/", full.names = T)
+rhos <- c(1,7,14)
+
+# compute scores
+scores_gp <- score_experiment(files_gp, rhos, "gp")
+
+# summarize scores
+scores_gp_sum <- summarize_scores(scores_gp)
+
+# plot 
+gp_pl <- plot_experiment(scores_gp_sum, c(2,4,6,8,9), expression("GP with "*rho*" in short-term kernel:"), "e")
+gp_pl
 ```

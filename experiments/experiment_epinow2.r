@@ -27,12 +27,15 @@ run_prediction_us <- function() {
     train_df_state <- readRDS(paste0("data/us-selected-states/", state, "-train.rds")) 
     test_df_state <- readRDS(paste0("data/us-selected-states/", state, "-test.rds"))
     
+    print(state)
+    
     # pop for adjustments
     pop <- cc$pop[toupper(cc$state_id) == state]
     
     # loop over forecasting dates
     K <- nrow(train_df_state)
     for (k in 1:K) {
+      print(k)
       # train and forecast for each model
       if (all(train_df_state$data[[k]]$incidence<=min_inc)) {
         # insert 0 predictions
@@ -42,6 +45,7 @@ run_prediction_us <- function() {
         }
       } else {
         for (ero in est_rt_opts) {
+          print(ero)
           test_df_state$data[[k]][[paste0("epinow2-",ero)]] <- get_samples(
             train_and_predict.epinow2(est_rt = ero, data = train_df_state$data[[k]], 
                                       seed = seed12345, n = n_preds, d = n_draws,
