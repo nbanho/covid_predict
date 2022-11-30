@@ -66,7 +66,7 @@ df_sel_us <- df_sel_us %>%
 saveRDS(df_sel_us, "data/us-selected-states_ts-date.rds")
 
 # generate training and prediction data
-date_seq <- seq.Date(start_date %m-% days(n_preds-1), end_date, by = "day")
+date_seq <- seq.Date(start_date, end_date %m-% days(n_preds), by = "week")
 for (st in toupper(selected_states)) {
   df_st <- dplyr::filter(df_sel_us, state == st)
   list_st_train <- list()
@@ -79,8 +79,7 @@ for (st in toupper(selected_states)) {
     list_st_test[[d]] <- df_st %>% 
       dplyr::select(date, cases, incidence) %>%
       dplyr::filter(date >= date_seq[d]) %>% 
-      dplyr::filter(date < date_seq[d] %m+% days(n_preds)) %>%
-      tail(d)
+      dplyr::filter(date < date_seq[d] %m+% days(n_preds)) 
   }
   df_st_train <- tibble(state = st, forecast_date = date_seq, data = list_st_train)
   df_st_test <- tibble(state = st, forecast_date = date_seq, data = list_st_test)

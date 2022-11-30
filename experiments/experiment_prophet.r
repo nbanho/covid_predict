@@ -33,14 +33,14 @@ run_prediction_us <- function() {
         # insert 0 predictions
         predicted_prophet <- matrix(0, nrow = n_preds, ncol = n_draws)
         for (tau in cp_scale) {
-          test_df_state$data[[k]][[paste0("prophet-",tau)]] <- get_samples(predicted_prophet, test_df_state$data[[k]], k)
+          test_df_state$data[[k]][[paste0("prophet-",tau)]] <- get_samples(predicted_prophet, test_df_state$data[[k]])
         }
       } else {
         for (tau in cp_scale) {
           test_df_state$data[[k]][[paste0("prophet-",tau)]] <- get_samples(
             train_and_predict.prophet(cp_scale = tau, data = train_df_state$data[[k]], 
                                       seed = seed12345, n = n_preds, d = n_draws),
-            test_df_state$data[[k]], k
+            test_df_state$data[[k]]
           )
         }
       }

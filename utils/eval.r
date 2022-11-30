@@ -2,78 +2,14 @@ library(scoringRules)
 library(pROC)
 library(tidybayes)
 library(covidcast)
+library(lubridate)
 
-source("../settings/naming.R")
-
-# read state id from file name
-read_state_id <- function(f) { gsub("(_.*)", "", basename(f)) }
-
-# read model from file name
-read_model <- function(f) { gsub(".rds", "", gsub("(.*_)", "", basename(f))) }
-
-# read forecasts
-read_n_ahead_forecasts <- function(files, n) {
-  df_F <- do.call(rbind, lapply(files, function(f) {
-    # read model name
-    m <- read_model(f)
-    
-    # read state id
-    s <- read_state_id(f)
-    
-    # read file 
-    df <- readRDS(f) 
-    
-    # filter data
-    df <- df %>%
-      get_n_ahead(n) %>%
-      unnest(cols = c("data")) %>%
-      mutate(state_id = tolower(s),
-             variable = m) %>%
-      unnest(cols = c("forecast")) 
-    
-    # compute incidence
-    if (grepl("epi", m)) {
-      df$forecast <- compute_incidence(df$forecast, df$state_id[1])
-    }
-    
-    return(df)
-  }))
+# compute forecasting score
+compute_forecast_score <- function(df, model, cap_fcast = c(0, 1e5), min_inc = 35, sum_by = "week", ...) {
+  #' aggregate forecasts und compute log incidence
+  df <- compute_incidence(df = df, model = model, cap_fcast = cap_fcast, min_inc = min_inc, sum_by = sum_by) 
+  df <- mutate(df, across(c(forecast, incidence), ~ log1p(.x)))
   
-  df_F <- df_F %>%
-    mutate(forecast = ifelse(forecast > max_inc, max_inc, forecast)) %>% 
-    mutate(variable = recode(variable, !!! model_names)) %>%
-    rename(value = forecast, target = incidence) %>%
-    mutate(state = recode(state_id, !!! state_names)) 
-}
-
-compute_forecast_score <- function(df, model, cap_fcast = c(0, 1e5), min_inc = 35, sum_by = c(0,7,14), ...) {
-  #' aggregate daily forecasts, e.g. by week
-  df <- add_n_ahead(df)
-  if (!is.null(sum_by)) {
-    df <- df %>%
-      unnest(cols = c("data")) %>%
-      mutate(n = as.integer(cut(n, sum_by))) %>%
-      group_by(state, date, n) %>%
-      summarize(incidence = sum(incidence),
-                forecast = list(colSums(do.call(rbind, forecast)))) %>%
-      ungroup() %>%
-      unnest(cols = "forecast")
-  } 
-  
-  #' compute incidence
-  #' - only for epi models making integer forecasts
-  #' - cap forecasts at incidence of 100,000 per 100,000 people (total pop.)
-  #' - remove forecasts if observed incidence is below 10
-  #' - take log of incidence (percent error)
-  if (grepl("epi", model)) {
-    df$forecast <- compute_incidence(df$forecast, tolower(df$state[1]))
-  }
-  df <- df %>%
-    filter(incidence > min_inc) %>%
-    mutate(forecast = ifelse(forecast < cap_fcast[1], cap_fcast[1], forecast),
-           forecast = ifelse(forecast > cap_fcast[2], cap_fcast[2], forecast),
-           # add 1e-6 if forecast is zero
-           across(c(forecast, incidence), ~ log1p(.x))) 
   
   #' compute score 
   score_df <- df %>%
@@ -83,38 +19,87 @@ compute_forecast_score <- function(df, model, cap_fcast = c(0, 1e5), min_inc = 3
   
   #' add info
   score_df <- score_df %>%
+    dplyr::select(state_id, state, date, year, month, week, n, model, incidence, score)
+  
+  return(score_df)
+}
+
+# compute incidence 
+compute_incidence <- function(df, model, cap_fcast = c(0, 1e5), min_inc = -Inf, sum_by = "week") {
+  #' aggregate daily forecasts, e.g. by week
+  df <- add_n_ahead(df)
+  
+  #' unnest data
+  df <- df %>%
+    unnest(cols = c("data")) %>%
+    unnest(cols = "forecast") %>%
+    group_by(date, n) %>%
+    mutate(draw = 1:n()) %>%
+    ungroup() %>%
+    # filter forecasting dates where less than 14 days were forecasted
+    filter(forecast_date >= min(date),
+           forecast_date <= max(date) %m-% days(max(n) + 1))
+  
+  #' compute incidence
+  #' - only for epi models making integer forecasts
+  #' - cap forecasts at incidence of 100,000 per 100,000 people (total pop.)
+  #' - remove forecasts if observed incidence is below 10
+  #' - take log of incidence (percent error)
+  #' 
+  if (grepl("epi", model)) {
+    df$forecast <- compute_incidence.epi(df$forecast, tolower(df$state[1]))
+  }
+  df <- df %>%
+    filter(incidence > min_inc) %>%
+    mutate(forecast = ifelse(forecast < cap_fcast[1], cap_fcast[1], forecast),
+           forecast = ifelse(forecast > cap_fcast[2], cap_fcast[2], forecast)) 
+  
+  if (!is.null(sum_by)) {
+    
+    if (sum_by == "week") {
+      n_days <- 7
+      cuts <- c(0, seq(n_days, max(df$n), n_days))
+      df <- df %>% mutate(date_by = format(forecast_date, "%Y-%W"))
+    }
+    
+    df_by <- df %>%
+      mutate(n = as.integer(cut(n, cuts))) %>%
+      group_by(date_by, n, draw) %>%
+      summarize(days = n(),
+                incidence = sum(incidence),
+                forecast = sum(forecast)) %>%
+      ungroup()
+    
+    df_by <- df %>%
+      group_by(state, date, ) %>%
+      summarise(incidence = incidence[1]) %>%
+      ungroup() %>%
+      group_by(state, date_by) %>%
+      summarize(date = date[1],
+                days = n(),
+                incidence = sum(incidence)) %>%
+      ungroup()
+    
+    forecast <- df  %>%
+      mutate(n = as.integer(cut(n, cuts))) %>%
+      group_by(state, forecast_by, n, draw) %>%
+      summarize(date_by = date_by[1],
+                forecast = sum(forecast)) %>%
+      ungroup()
+    
+  } 
+  
+  df_by <- left_join(observed, forecast) %>%
+    # rescale incidence for some weeks with less than seven days (missing reports)
+    mutate(across(c(incidence, forecast), ~ (n_days / days) * .x)) %>%
     rename(state_id = state) %>%
     mutate(model = model,
            model = recode(model, !!! model_names),
            model = factor(model, model_names),
            state = recode(state_id, !!! state_names)) %>%
-    select(state_id, state, date, n, model, incidence, score)
+    dplyr::select(state_id, state, date, date_by, n, model, draw, incidence, forecast)
   
-  return(score_df)
-}
-
-compute_forecast_score.files <- function(files, sum_by = NULL, ...) { 
-  do.call(rbind, map(files, function(f) {
-    
-    print(sprintf("Compute score for file %s", f))
-    
-    m <- read_model(f)
-    
-    # read state id
-    s <- read_state_id(f)
-    
-    # read file 
-    df <- readRDS(f) 
-    
-    # compute score
-    compute_forecast_score(df, m, s, sum_by, ...)
-  }))
-}
-
-# get n_ahead forecast draws by model
-get_n_ahead <- function(D, n = 10) {
-  D$data <- map2(D$data, D$forecast_date, function(d,f) dplyr::filter(d, date == f %m+% days(n-1)))
-  D %>% dplyr::filter(sapply(D$data, nrow) > 0)
+  return(df_by)
 }
 
 # add n_ahead
@@ -125,14 +110,15 @@ add_n_ahead <- function(D) {
   return(D)
 }
 
-# compute incidence
+# compute incidence for epi models
 cc <- county_census %>%
   dplyr::filter(COUNTY == 0) %>%
   mutate(state_id = tolower(fips_to_abbr(FIPS))) %>%
   rename(pop = POPESTIMATE2019) %>%
   dplyr::select(state_id, pop)
 
-compute_incidence <- function(x, state_id) { x / cc$pop[cc$state_id==state_id] * 1e5 }
+compute_incidence.epi <- function(x, state_id) { x / cc$pop[cc$state_id==state_id] * 1e5 }
+
 
 pred_score <- function(
   x, # predicted target

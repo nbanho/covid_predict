@@ -14,8 +14,6 @@ knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
 library(reshape2)
 library(lubridate)
-library(grid)
-library(gridExtra)
 library(covidcast)
 
 # utils
@@ -24,14 +22,24 @@ source("utils/delays.r")
 
 # helper
 source("helper/plotting.r")
+
+# settings
+source("settings/naming.r")
 ```
 
 ## Data
 
 ```{r}
-# files
-files <- list.files("predictions", pattern = ".rds", full.names = T)
+inci <- tibble()
+for (model in dir("predictions")) {
+  for (file in list.files(paste0("predictions/", model, "/"), full.names = T)) {
+    df <- readRDS(file)
+    inci <- rbind(inci, compute_incidence(df, model))
+  }
+}
+```
 
+```{r}
 # phase labels
 phase_labs <- read_csv("data/us-selected-states_labeled-phases.csv") %>%
   rename(start_date = date) %>%
@@ -46,32 +54,12 @@ phase_labs <- read_csv("data/us-selected-states_labeled-phases.csv") %>%
   mutate(date = map2(start_date, end_date, function(s,e) seq.Date(s, e, by = "day"))) %>%
   unnest(cols = c("date"))
 
-phase_names <- c("exponential growth", "subexponential growth", "plateau", 
-                "subexponential decline", "exponential decline")
-phase_names_abrv <- c("Exponential\ngrowth", "Subexponential\ngrowth", "Plateau", 
-                      "Subexponential\ndecline", "Exponential\ndecline")
-phase_names_abrv2 <- c("Exponential growth", "Subexponential growth", "Plateau", 
-                      "Subexponential decline", "Exponential decline")
-names(phase_names_abrv) <- phase_names
-names(phase_names_abrv2) <- phase_names
-
-# models
-models <- c("epiestim", "epinow2", "epidemia", "arima", "prophet", "gp")
-model_names <- c("EpiEstim", "EpiNow2", "Epidemia", "ARIMA", "Prophet", "GP")
-names(model_names) <- models
-
-# states
-states <- c("az","ca","il","md","nj","ny")
-state_names <- c("Arizona", "California", "Illinois", 
-                 "Maryland", "New Jersey", "New York")
-names(state_names) <- states
-
 # parameters
 # - model colors
 mcols <- RColorBrewer::brewer.pal(length(models), "Dark2")
 # - discretize forecast weeks
 n_brks <- c(0, 7, 14, 21)
-n_lbs <- c("1-week forecast", "2-weeks forecast", "3-weeks forecast")
+n_lbs <- c("1-week forecast", "2-weeks forecast")
 # - discretize incidence
 inc_small_brks <- c(-Inf, 10, 30, 50, 70, 90, 110, 150, Inf)
 # - default ahead forecast to look at
@@ -85,6 +73,35 @@ max_inc <- 300
 ## Plot forecast
 
 ### Example forecast
+
+```{r}
+ca_1week_pl <- inci %>%
+  dplyr::filter(state_id == "NY",
+                n == 1) %>%
+  ggplot(aes(x = date)) +
+  stat_lineribbon(aes(y = forecast), point_interval = "mean_qi", .width = c(.95), size = 1) +
+  geom_line(aes(y = incidence), linewidth = 1, color = "red") +
+  facet_wrap(~model) +
+  scale_fill_brewer() +
+  scale_y_continuous(limits = c(0, 5000)) +
+  theme_bw() +
+  theme(legend.position = "none")
+
+ca_1week_pl
+
+ca_2week_pl <- inci %>%
+  dplyr::filter(state_id == "CA",
+                n == 2) %>%
+  ggplot(aes(x = date)) +
+  stat_lineribbon(aes(y = forecast), point_interval = "mean_qi", .width = c(.95), size = 1) +
+  geom_line(aes(y = incidence), linewidth = 1, color = "red") +
+  facet_wrap(~model) +
+  scale_fill_brewer() +
+  theme_bw() +
+  theme(legend.position = "none")
+
+ca_2week_pl
+```
 
 ```{r}
 ex_state <- "California"

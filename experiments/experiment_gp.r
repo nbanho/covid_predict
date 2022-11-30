@@ -33,14 +33,14 @@ run_prediction_us <- function() {
         # insert 0 predictions
         predicted_gp <- matrix(0, nrow = n_preds, ncol = n_draws)
         for (r in rhos) {
-          test_df_state$data[[k]][[paste0("gp-",r)]] <- get_samples(predicted_gp, test_df_state$data[[k]], k)
+          test_df_state$data[[k]][[paste0("gp-",r)]] <- get_samples(predicted_gp, test_df_state$data[[k]])
         }
       } else {
         for (r in rhos) {
           test_df_state$data[[k]][[paste0("gp-",r)]] <- get_samples(
             train_and_predict.gp(rho_short = r, data = train_df_state$data[[k]], 
-                                       seed = seed12345, n = n_preds, d = n_draws),
-            test_df_state$data[[k]], k
+                                 seed = seed12345, n = n_preds, d = n_draws),
+            test_df_state$data[[k]]
           )
         }
       }

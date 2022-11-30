@@ -38,14 +38,14 @@ run_prediction_us <- function() {
         # insert 0 predictions
         predicted_arima <- matrix(0, nrow = n_preds, ncol = n_draws)
         for (i in 1:nrow(pdq_orders)) {
-          test_df_state$data[[k]][[paste0("arima-",paste(pdq_orders[i,],collapse=""))]] <- get_samples(predicted_arima, test_df_state$data[[k]], k)
+          test_df_state$data[[k]][[paste0("arima-",paste(pdq_orders[i,],collapse=""))]] <- get_samples(predicted_arima, test_df_state$data[[k]])
         }
       } else {
         for (i in 1:nrow(pdq_orders)) {
           test_df_state$data[[k]][[paste0("arima-",paste(pdq_orders[i,],collapse=""))]] <- get_samples(
             train_and_predict.arima(pdq_order = pdq_orders[i,], data = train_df_state$data[[k]], 
-                                      seed = seed12345, n = n_preds, d = n_draws),
-            test_df_state$data[[k]], k
+                                    seed = seed12345, n = n_preds, d = n_draws),
+            test_df_state$data[[k]]
           )
         }
       }

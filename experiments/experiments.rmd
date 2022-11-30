@@ -21,20 +21,24 @@ library(lubridate)
 
 # utils
 source("../utils/eval.r")
+
+# helper
 source("../helper/plotting.r")
+
+# settings
+source("../settings/naming.r")
 
 # compute scores
 score_experiment <- function(files, parameter, model) {
   scores_df <- tibble()
   for (f in 1:length(files)) {
-    print(f)
     df <- readRDS(files[f])
     for (p in parameter) {
-      print(p)
       df_p <- df %>% mutate(data = map(data, function(D) 
         D %>% 
-          select(all_of(c("date", "cases", "incidence", paste0(model, "-", p)))) %>%
-          set_names(c("date", "cases", "incidence", "forecast"))))
+          dplyr::select(all_of(c("date", "cases", "incidence", paste0(model, "-", p)))) %>%
+          set_names(c("date", "cases", "incidence", "forecast")))
+        )
       crps <- compute_forecast_score(df = df_p, model = model) %>%
         mutate(variable = p)
       scores_df <- rbind(scores_df, crps)
@@ -153,4 +157,23 @@ scores_gp_sum <- summarize_scores(scores_gp)
 # plot 
 gp_pl <- plot_experiment(scores_gp_sum, c(2,4,6,8,9), expression("GP with "*rho*" in short-term kernel:"), "e")
 gp_pl
+```
+
+
+## Best models
+
+```{r}
+for (f in c(files_epiestim, files_arima, files_prophet, files_gp)) {
+  model <- gsub(".rds", "", dirname(f))
+  p <- ifelse(model == "epiestim", "7",
+              ifelse(model == "arima", "101",
+                     ifelse(model == "prophet", "0.45", "7")))
+  df <- readRDS(f) %>% 
+    mutate(data = map(data, function(D) 
+      D %>% 
+        dplyr::select(all_of(c("date", "cases", "incidence", paste0(model, "-", p)))) %>%
+        set_names(c("date", "cases", "incidence", "forecast")))
+      )
+  saveRDS(df, paste0("../predictions/", dirname(f), "/", basename(f)))
+}
 ```

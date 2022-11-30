@@ -41,7 +41,7 @@ run_prediction_us <- function() {
         # insert 0 predictions
         predicted_epinow2 <- matrix(0, nrow = n_preds, ncol = n_draws)
         for (ero in est_rt_opts) {
-          test_df_state$data[[k]][[paste0("epinow2-",ero)]] <- get_samples(predicted_epinow2, test_df_state$data[[k]], k)
+          test_df_state$data[[k]][[paste0("epinow2-",ero)]] <- get_samples(predicted_epinow2, test_df_state$data[[k]])
         }
       } else {
         for (ero in est_rt_opts) {
@@ -50,7 +50,7 @@ run_prediction_us <- function() {
             train_and_predict.epinow2(est_rt = ero, data = train_df_state$data[[k]], 
                                       seed = seed12345, n = n_preds, d = n_draws,
                                       pop = pop),
-            test_df_state$data[[k]], k
+            test_df_state$data[[k]]
           )
         }
       }

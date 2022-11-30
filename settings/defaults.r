@@ -39,7 +39,7 @@ train_and_predict <- function(model, ...) {
 }
 
 # get samples
-get_samples <- function(DM, TM, k, ns = n_draws, np = n_preds) {
+get_samples <- function(DM, TM, k = n_preds, ns = n_draws, np = n_preds) {
   DM <- DM[ ,1:ns]
   DM <- matrix(DM, ncol = ns)
   n <- nrow(TM)
