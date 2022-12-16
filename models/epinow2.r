@@ -21,8 +21,16 @@ train_and_predict.epinow2 <- function(est_rt, ...) {
   args <- c(as.list(environment()), list(...))
   
   # rename and select columns
+  # filter very low incidence
+  #' i.e. cumulative cases >= 10 or cumulative incidence >=1
+  #' EpiNow2 may otherwise not initialize as leading zeros cannot effectively be removed
   data <- data.frame(date = args$data$date,
-                     confirm = args$data$cases)
+                     confirm = args$data$cases,
+                     incidence = args$data$incidence) %>%
+    mutate(cum_cases = cumsum(confirm),
+           cum_incidence = cumsum(incidence)) %>%
+    dplyr::filter(cum_cases >= 10 | cum_incidence >= 1) %>%
+    dplyr::select(date, confirm)
   
   # parameters
   if (est_rt == "backcalc" ) {
