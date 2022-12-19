@@ -3,9 +3,11 @@ library(pROC)
 library(tidybayes)
 library(covidcast)
 library(lubridate)
+library(scoringutils)
 
 # compute forecasting score
 compute_forecast_score <- function(df, model, cap_fcast = c(0, 1e5), min_inc = 35, sum_by = "week", ...) {
+  #TODO: check and potentially adjust the maximum of cap_fcast
   #' aggregate forecasts und compute log incidence
   df <- compute_incidence(df = df, model = model, cap_fcast = cap_fcast, min_inc = min_inc, sum_by = sum_by) 
   df <- mutate(df, across(c(forecast, incidence), ~ log1p(.x)))
@@ -13,13 +15,13 @@ compute_forecast_score <- function(df, model, cap_fcast = c(0, 1e5), min_inc = 3
   
   #' compute score 
   score_df <- df %>%
-    group_by(state, date, n, incidence) %>%
+    group_by(state_id, state, model, date, n, incidence) %>%
     summarize(score = pred_score(forecast, incidence[1], ...)) %>%
     ungroup()
   
   #' add info
   score_df <- score_df %>%
-    dplyr::select(state_id, state, date, year, month, week, n, model, incidence, score)
+    dplyr::select(state_id, state, model, date, n, incidence, score)
   
   return(score_df)
 }
@@ -35,10 +37,7 @@ compute_incidence <- function(df, model, cap_fcast = c(0, 1e5), min_inc = -Inf, 
     unnest(cols = "forecast") %>%
     group_by(date, n) %>%
     mutate(draw = 1:n()) %>%
-    ungroup() %>%
-    # filter forecasting dates where less than 14 days were forecasted
-    filter(forecast_date >= min(date),
-           forecast_date <= max(date) %m-% days(max(n) + 1))
+    ungroup() 
   
   #' compute incidence
   #' - only for epi models making integer forecasts
@@ -59,45 +58,37 @@ compute_incidence <- function(df, model, cap_fcast = c(0, 1e5), min_inc = -Inf, 
     if (sum_by == "week") {
       n_days <- 7
       cuts <- c(0, seq(n_days, max(df$n), n_days))
-      df <- df %>% mutate(date_by = format(forecast_date, "%Y-%W"))
+      df <- df %>% mutate(date_by = format(date, "%Y-%W"))
     }
     
-    df_by <- df %>%
+    forecastDF <- df %>%
       mutate(n = as.integer(cut(n, cuts))) %>%
-      group_by(date_by, n, draw) %>%
+      group_by(state, date_by, n, draw) %>%
       summarize(days = n(),
-                incidence = sum(incidence),
                 forecast = sum(forecast)) %>%
-      ungroup()
+      ungroup() %>%
+      rename(date = date_by)
     
-    df_by <- df %>%
-      group_by(state, date, ) %>%
-      summarise(incidence = incidence[1]) %>%
+    observedDF <- df  %>%
+      group_by(date_by, date) %>%
+      slice(1) %>%
       ungroup() %>%
       group_by(state, date_by) %>%
-      summarize(date = date[1],
-                days = n(),
-                incidence = sum(incidence)) %>%
-      ungroup()
-    
-    forecast <- df  %>%
-      mutate(n = as.integer(cut(n, cuts))) %>%
-      group_by(state, forecast_by, n, draw) %>%
-      summarize(date_by = date_by[1],
-                forecast = sum(forecast)) %>%
-      ungroup()
+      summarize(incidence = sum(incidence)) %>%
+      ungroup() %>%
+      rename(date = date_by)
     
   } 
   
-  df_by <- left_join(observed, forecast) %>%
+  df_by <- left_join(observedDF, forecastDF, by = c("state", "date")) %>%
     # rescale incidence for some weeks with less than seven days (missing reports)
     mutate(across(c(incidence, forecast), ~ (n_days / days) * .x)) %>%
     rename(state_id = state) %>%
     mutate(model = model,
            model = recode(model, !!! model_names),
            model = factor(model, model_names),
-           state = recode(state_id, !!! state_names)) %>%
-    dplyr::select(state_id, state, date, date_by, n, model, draw, incidence, forecast)
+           state = recode(tolower(state_id), !!! state_names)) %>%
+    dplyr::select(state_id, state, date, n, model, draw, incidence, forecast)
   
   return(df_by)
 }
