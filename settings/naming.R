@@ -1,6 +1,6 @@
 # models
 models <- c("epiestim", "epinow2", "epidemia", "arima", "prophet", "gp")
-model_names <- c("EpiEstim", "EpiNow2", "Epidemia", "ARIMA", "Prophet", "GP")
+model_names <- c("EpiEstim", "EpiNow2", "Epidemia", "SARIMA", "Prophet", "GP")
 names(model_names) <- models
 
 # states

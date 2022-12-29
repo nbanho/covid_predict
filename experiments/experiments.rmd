@@ -62,10 +62,10 @@ plot_experiment <- function(score_df, col_blues, expr, title) {
   cols <- brewer.pal(9, "Blues")[col_blues]
     
   score_df %>%
-    ggplot(aes(x = n, y = score, color = factor(variable))) +
+    mutate(n = ordered(paste0(n, "-week ahead forecast"), levels = c("1-week ahead forecast", "2-week ahead forecast"))) %>%
+    ggplot(aes(x = n, y = score, color = factor(variable), group = variable)) +
     geom_line() +
     geom_point(shape = 1) +
-    scale_x_continuous(breaks = seq(1,2), labels = function(x) paste("Week", x)) +
     #scale_y_continuous(limits = c(0,1)) +
     scale_color_manual(values = cols) +
     labs(y = "Average CRPS", color = expr, title = title) +
@@ -78,12 +78,12 @@ boxplot_experiment <- function(score_df, col_blues, expr, title) {
   cols <- brewer.pal(9, "Blues")[col_blues]
     
   score_df %>%
-    mutate(n = factor(paste("Week", n), levels = c("Week 1", "Week 2"))) %>%
+    mutate(n = factor(paste0(n, "-week ahead forecast"), levels = c("1-week ahead forecast", "2-week ahead forecast"))) %>%
     ggplot(aes(x = n, y = score, color = factor(variable))) +
     geom_boxplot() +
     scale_color_manual(values = cols) +
     scale_y_sqrt() +
-    labs(y = "Average CRPS (sqrt scale)", color = expr, title = title) +
+    labs(y = "CRPS (sqrt scale)", color = expr, title = title) +
     theme_bw2() +
     theme(axis.title.x = element_blank(), legend.position = "top") 
 }
@@ -214,7 +214,7 @@ all_plots <- arrangeGrob(epiestim_sum_pl + labs(title = "a   EpiEstim\n")
                                  legend.box = "horizontal", legend.margin = margin(0), legend.key = element_blank(),
                                  legend.box.margin=margin(b = 10)),
                          epinow_pl + theme(legend.position = "none", title = element_blank()),
-                         arima_sum_pl + labs(title = "c   ARIMA\n") + 
+                         arima_sum_pl + labs(title = "c   SARIMA\n") + 
                            theme(plot.margin = unit(c(5.5, 7.5, 5.5, 5.5), "points"), plot.title.position = "plot", legend.position = c(-.125,1.05),
                                  legend.justification = "left", legend.direction = "horizontal", legend.title = element_blank(),
                                  legend.box = "horizontal", legend.margin = margin(0), legend.key = element_blank(),
@@ -232,8 +232,8 @@ all_plots <- arrangeGrob(epiestim_sum_pl + labs(title = "a   EpiEstim\n")
                                  legend.box = "horizontal", legend.margin = margin(0), legend.key = element_blank(),
                                  legend.box.margin=margin(b = 10)), 
                         gp_pl + theme(legend.position = "none", title = element_blank()),
-                         ncol = 2, widths = c(8, 8))
-ggsave("../results/experiments.pdf", all_plots, width = 16 / cm(1), height = 24 / cm(1))
+                         ncol = 2, widths = c(8.25, 7.75))
+ggsave("../results/experiments.pdf", all_plots, width = 16 / cm(1), height = 21 / cm(1))
 ```
 
 ```{r}

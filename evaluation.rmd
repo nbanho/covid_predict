@@ -88,7 +88,7 @@ plot_forecasts <- function(sid = "CA", n_week = 1, title = "a   1-week ahead for
 
 for (sid in states) {
   sid_1week_pl <- plot_forecasts(toupper(sid), n_week = 1, title = paste("a   1-week ahead forecast for", state_names[sid]))
-  sid_2week_pl <- plot_forecasts(toupper(sid), n_week = 2, title = paste("a   1-week ahead forecast for", state_names[sid]))
+  sid_2week_pl <- plot_forecasts(toupper(sid), n_week = 2, title = paste("b   2-week ahead forecast for", state_names[sid]))
   sid_week_pl <- arrangeGrob(sid_1week_pl, sid_2week_pl, ncol = 2, widths = c(8,8))
   ggsave(paste0("results/example-forecast-", sid, ".pdf"), sid_week_pl, width = 16 / cm(1), height = 16 / cm(1))
 }
@@ -416,8 +416,13 @@ hotspot <- inci %>%
   ungroup() %>%
   mutate(n = ordered(paste0(n, "-week ahead forecast"))) 
 
-hotspot_rocs <- hotspot %>%
-  dplyr::filter(incidence >= 10) %>%
+hotspot_filt <- hotspot %>%
+  dplyr::filter(incidence >= 70) 
+
+nrow(hotspot_filt) / nrow(hotspot)
+sum(hotspot_filt$is_hotspot, na.rm = T) / nrow(hotspot_filt)
+
+hotspot_rocs <- hotspot_filt %>%
   mutate(is_hotspot = factor(ifelse(is_hotspot, "Yes", "No"), levels = c("No", "Yes"))) %>%
   group_by(n, model) %>%
   summarize(rocs = list(roc(is_hotspot, p_hotspot))) %>%
